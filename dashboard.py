@@ -5,7 +5,57 @@ import string
 from datetime import date
 
 import pandas as pd
+import requests
 import streamlit as st
+
+
+# ---------------------------------------------------------------------------
+# Ollama connectivity (Phase 1)
+# ---------------------------------------------------------------------------
+
+REQUIRED_MODELS = ["finops-triage", "finops-resolver"]
+
+
+def check_ollama_connection(endpoint_url):
+    """Check Ollama endpoint health and model availability.
+
+    Returns dict: reachable, models_found, models_missing, error.
+    """
+    url = endpoint_url.rstrip("/") + "/api/tags"
+    try:
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        available = {m["name"].split(":")[0] for m in data.get("models", [])}
+        found = [m for m in REQUIRED_MODELS if m in available]
+        missing = [m for m in REQUIRED_MODELS if m not in available]
+        return {
+            "reachable": True,
+            "models_found": found,
+            "models_missing": missing,
+            "error": None,
+        }
+    except requests.exceptions.Timeout:
+        return {
+            "reachable": False,
+            "models_found": [],
+            "models_missing": REQUIRED_MODELS,
+            "error": f"Could not reach the AI models. Check that Ollama is running at {endpoint_url}.",
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "reachable": False,
+            "models_found": [],
+            "models_missing": REQUIRED_MODELS,
+            "error": f"Could not reach the AI models. Check that Ollama is running at {endpoint_url}.",
+        }
+    except Exception:
+        return {
+            "reachable": False,
+            "models_found": [],
+            "models_missing": REQUIRED_MODELS,
+            "error": "Connection check failed. Verify the endpoint URL in the sidebar.",
+        }
 
 # ---------------------------------------------------------------------------
 # Constants ported from resolver/scripts/gen_resolver.py
@@ -424,6 +474,24 @@ with st.sidebar:
         key="ollama_url",
         help="URL of the Ollama instance hosting finops-triage and finops-resolver models.",
     )
+
+    # -- Connection status --
+    test_btn = st.button("Test Connection", use_container_width=True)
+    if test_btn:
+        st.session_state["conn"] = check_ollama_connection(st.session_state["ollama_url"])
+
+    conn = st.session_state.get("conn")
+    if conn is not None:
+        if conn["reachable"] and not conn["models_missing"]:
+            st.success("Connected — both models available")
+        elif conn["reachable"] and conn["models_missing"]:
+            for m in conn["models_missing"]:
+                st.warning(f"{m} is not installed. Run:  `ollama pull {m}`")
+            if conn["models_found"]:
+                st.info(f"Available: {', '.join(conn['models_found'])}")
+        else:
+            st.error(conn["error"])
+
     st.divider()
     fail_count = st.slider(
         "Fails to Generate",
@@ -433,10 +501,6 @@ with st.sidebar:
         key="fail_count",
     )
     generate_btn = st.button("Generate Fails", type="primary", use_container_width=True)
-
-    st.divider()
-    st.caption("Phase 0 — Data Generation & Display")
-    st.caption("AI pipeline not yet connected.")
 
 # ---- Title ----
 st.title("Settlement Fail Resolution Dashboard")
