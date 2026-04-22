@@ -2,6 +2,7 @@
 
 import json
 import random
+import re
 import string
 from datetime import date
 
@@ -366,6 +367,36 @@ def select_fallbacks(inventory, remaining, deadline_days):
     return "BUY_IN_NOTICE", 0, "BUY_IN_NOTICE", 0, False
 
 
+def generate_related_fails(ftrs):
+    unique_cps = len({f["dtc"] for f in ftrs})
+    aged = sum(1 for f in ftrs if f["age_days"] >= 5)
+    has_gridlock = unique_cps >= 3 and (
+        any(f["age_days"] >= 7 for f in ftrs) or aged >= 2
+    )
+
+    fails = []
+    if has_gridlock:
+        parties = sorted({f["dtc"] for f in ftrs})
+        for party in parties[: random.randint(1, min(3, len(parties)))]:
+            fails.append({
+                "category": random.choice(["DVP_FAIL", "CNS_FAIL"]),
+                "dtc": party,
+                "qty": random.randint(1000, 30000),
+                "side": random.choice(["Buy", "Sell"]),
+                "age_days": random.randint(2, 15),
+            })
+    elif random.random() < 0.3:
+        for _ in range(random.randint(1, 2)):
+            fails.append({
+                "category": random.choice(["DVP_FAIL", "CNS_FAIL"]),
+                "dtc": random_dtc(),
+                "qty": random.randint(500, 10000),
+                "side": random.choice(["Buy", "Sell"]),
+                "age_days": random.randint(1, 5),
+            })
+    return fails
+
+
 def _market_value():
     """Generate a realistic market value across tiers."""
     r = random.random()
@@ -424,6 +455,15 @@ def generate_fail(dtc_firm_map):
     firm_name = _pick_firm(category, cp_dtc, dtc_firm_map)
     inventory = generate_inventory()
 
+    for ftr in ftrs:
+        if ftr["dtc"] not in dtc_firm_map:
+            dtc_firm_map[ftr["dtc"]] = random.choice(EXECUTION_BROKERS)
+
+    related_fails = generate_related_fails(ftrs)
+    for rf in related_fails:
+        if rf["dtc"] not in dtc_firm_map:
+            dtc_firm_map[rf["dtc"]] = random.choice(EXECUTION_BROKERS)
+
     # Escalation risk label
     tier = triage["priority_tier"]
     esc = triage["escalation_level"]
@@ -457,12 +497,14 @@ def generate_fail(dtc_firm_map):
         "inventory": inventory,
         "ftrs": ftrs,
         "ftr_count": ftr_count,
+        "related_fails": related_fails,
     }
 
 
 def generate_fails(count):
     dtc_firm_map = _build_dtc_firm_map()
-    return [generate_fail(dtc_firm_map) for _ in range(count)]
+    fails = [generate_fail(dtc_firm_map) for _ in range(count)]
+    return fails, dtc_firm_map
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +599,7 @@ def call_triage(endpoint_url, fail):
         resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        return {"ok": True, "data": json.loads(content), "raw_prompt": prompt}
+        return {"ok": True, "data": json.loads(content), "raw_prompt": prompt, "raw_content": content}
     except requests.exceptions.Timeout:
         return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
     except requests.exceptions.ConnectionError:
@@ -572,6 +614,126 @@ def _is_connected():
     """Check if connection state is confirmed green."""
     conn = st.session_state.get("conn")
     return conn is not None and conn["reachable"] and not conn["models_missing"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Resolver pipeline (Phase 3)
+# ---------------------------------------------------------------------------
+
+RESOLVER_SYSTEM_PROMPT = (
+    "You are a post-trade settlement resolution assistant. Given a triage output, "
+    "inventory snapshot, and pending FTRs for a CUSIP, recommend an ordered resolution "
+    "sequence following the KB resolution logic. Chase FTRs first (oldest then largest), "
+    "apply free box, recall before borrow. Apply partials immediately. Detect and flag "
+    "gridlock. Output JSON only — no explanation, no markdown, no preamble."
+)
+
+ACTION_DISPLAY = {
+    "CHASE_FTR": "Contact counterparty to deliver shares",
+    "APPLY_BOX": "Apply available inventory",
+    "INITIATE_RECALL": "Recall shares from lending program",
+    "SOURCE_BORROW": "Source external stock loan",
+    "PARTIAL_DELIVER": "Deliver available shares immediately",
+    "DEPOT_MOVEMENT": "Transfer shares to depository",
+    "NET_GRIDLOCK": "Propose coordinated net settlement",
+    "BUY_IN_NOTICE": "Issue formal buy-in notice",
+    "SPO_SETTLEMENT": "Cash settle via Special Payment Order",
+    "OFFSET_FTR": "Apply pending receipt against obligation",
+    "ESCALATE": "Escalate for manual resolution",
+}
+
+FALLBACK_DISPLAY = {
+    "INITIATE_RECALL": "recall shares from lending",
+    "SOURCE_BORROW": "source external stock loan",
+    "APPLY_BOX": "apply available inventory",
+    "NET_GRIDLOCK": "propose coordinated net settlement",
+    "BUY_IN_NOTICE": "issue formal buy-in notice",
+    "SPO_SETTLEMENT": "cash settle via Special Payment Order",
+    "ESCALATE": "escalate for manual resolution",
+    "STOCK_LOAN": "source external stock loan",
+    "RECALL": "recall shares from lending",
+}
+
+
+def strip_think_blocks(text):
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def _dtc_to_firm(dtc_code, dtc_firm_map):
+    raw = dtc_code.replace("DTC-", "")
+    return dtc_firm_map.get(raw, dtc_code)
+
+
+def compose_resolver_input(fail, triage_data):
+    ftrs_formatted = []
+    for ftr in fail["ftrs"]:
+        ftr_copy = dict(ftr)
+        if not str(ftr_copy["dtc"]).startswith("DTC-"):
+            ftr_copy["dtc"] = f"DTC-{ftr_copy['dtc']}"
+        ftrs_formatted.append(ftr_copy)
+
+    related_formatted = []
+    for rf in fail.get("related_fails", []):
+        rf_copy = dict(rf)
+        if not str(rf_copy["dtc"]).startswith("DTC-"):
+            rf_copy["dtc"] = f"DTC-{rf_copy['dtc']}"
+        related_formatted.append(rf_copy)
+
+    return {
+        "triage": triage_data,
+        "cusip": fail["cusip"],
+        "ftd_qty": fail["ftd_qty"],
+        "inventory": fail["inventory"],
+        "ftrs": ftrs_formatted,
+        "related_fails": related_formatted,
+    }
+
+
+def call_resolver(endpoint_url, fail, triage_data):
+    url = endpoint_url.rstrip("/") + "/api/chat"
+    resolver_input = compose_resolver_input(fail, triage_data)
+    prompt = "Resolve this fail:\n" + json.dumps(resolver_input)
+
+    payload = {
+        "model": "finops-resolver",
+        "messages": [
+            {"role": "system", "content": RESOLVER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=180)
+        resp.raise_for_status()
+        content = resp.json()["message"]["content"]
+        cleaned = strip_think_blocks(content)
+        return {
+            "ok": True,
+            "data": json.loads(cleaned),
+            "raw_prompt": prompt,
+            "raw_content": content,
+        }
+    except requests.exceptions.Timeout:
+        return {
+            "ok": False,
+            "error": "Stage 2 resolution timed out. Complex scenarios may take up to 30 seconds.",
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "ok": False,
+            "error": "Stage 2 could not reach the AI models. Check Ollama endpoint.",
+        }
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return {
+            "ok": False,
+            "error": "Stage 2 returned an unexpected response. Try again.",
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "error": "Stage 2 returned an unexpected response. Try again.",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -628,29 +790,23 @@ st.caption("Two-model AI pipeline: Triage → Resolver")
 
 # ---- Generate on button click ----
 if generate_btn:
-    st.session_state["fails"] = generate_fails(fail_count)
+    fails_generated, dtc_firm_map = generate_fails(fail_count)
+    st.session_state["fails"] = fails_generated
+    st.session_state["dtc_firm_map"] = dtc_firm_map
+    st.session_state.pop("triage_result", None)
+    st.session_state.pop("triage_fail_idx", None)
+    st.session_state.pop("resolver_result", None)
+    st.session_state.pop("resolver_fail_idx", None)
 
 fails = st.session_state.get("fails", [])
 
 # ---- Summary Metrics ----
 col1, col2, col3, col4, col5 = st.columns(5)
-if fails:
-    critical_count = sum(1 for f in fails if f["priority_tier"] == "CRITICAL")
-    high_count = sum(1 for f in fails if f["priority_tier"] == "HIGH")
-    escalation_count = sum(1 for f in fails if f["escalation_risk"] == "High")
-    gridlock_count = 0  # Phase 3+
-    avg_coverage = 0.0  # Phase 3+
-    col1.metric("Total Fails", len(fails))
-    col2.metric("Critical Priority", critical_count)
-    col3.metric("Escalation Required", escalation_count)
-    col4.metric("Avg Coverage", f"{avg_coverage:.0f}%")
-    col5.metric("Gridlock Detected", gridlock_count)
-else:
-    col1.metric("Total Fails", 0)
-    col2.metric("Critical Priority", 0)
-    col3.metric("Escalation Required", 0)
-    col4.metric("Avg Coverage", "0%")
-    col5.metric("Gridlock Detected", 0)
+col1.metric("Total Fails", len(fails) if fails else 0)
+col2.metric("Critical Priority", "—", help="Available after batch analysis")
+col3.metric("Escalation Required", "—", help="Available after batch analysis")
+col4.metric("Avg Coverage", "—", help="Available after batch analysis")
+col5.metric("Gridlock Detected", "—", help="Available after batch analysis")
 
 st.divider()
 
@@ -666,24 +822,24 @@ if fails:
             "Shares": f"{f['ftd_qty']:,}",
             "Market Value": _format_market_value(f["market_value"]),
             "Age (Days)": f["age_days"],
-            "Priority Tier": TIER_DISPLAY.get(f["priority_tier"], f["priority_tier"]),
-            "Escalation Risk": f["escalation_risk"],
+            "Reg SHO": "Yes" if f["reg_sho"] else "No",
+            "Inventory": f"{f['inv_coverage_pct']}%",
         })
 
     df = pd.DataFrame(rows)
 
-    def _color_tier(row):
-        tier = row["Priority Tier"]
-        if tier == "Critical":
+    def _color_age(row):
+        age = row["Age (Days)"]
+        if age >= 10:
             return ["background-color: #3b1219; color: #fca5a5"] * len(row)
-        elif tier == "High":
+        elif age >= 7:
             return ["background-color: #3b2408; color: #fcd34d"] * len(row)
-        elif tier == "Medium":
+        elif age >= 4:
             return ["background-color: #0b3d2e; color: #6ee7b7"] * len(row)
         else:
             return ["background-color: #0d2818; color: #86efac"] * len(row)
 
-    styled = df.style.apply(_color_tier, axis=1).set_properties(
+    styled = df.style.apply(_color_age, axis=1).set_properties(
         **{"text-align": "left"}
     )
 
@@ -724,10 +880,29 @@ if fails:
             else:
                 st.error(result["error"])
 
-    # ---- Display Triage Results ----
+    # ---- Debug Expanders ----
     triage_result = st.session_state.get("triage_result")
     triage_fail_idx = st.session_state.get("triage_fail_idx")
 
+    if triage_result and triage_fail_idx == selected_idx:
+        with st.expander("Debug: Selected Fail Verification"):
+            st.write(f"**Dropdown index:** {selected_idx}")
+            st.write(f"**Stored triage_fail_idx:** {triage_fail_idx}")
+            st.write(f"**CUSIP:** {selected_fail['cusip']}")
+            st.write(f"**Firm:** {selected_fail['firm_name']}")
+            st.write(f"**Category:** {selected_fail['category']}")
+            st.write(f"**Generated priority_tier:** {selected_fail['priority_tier']}")
+            st.write(f"**Generated priority_score:** {selected_fail['priority_score']}")
+            st.write(f"**Age:** {selected_fail['age_days']}d | Market Value: {_format_market_value(selected_fail['market_value'])}")
+            st.write(f"**Reg SHO:** {selected_fail['reg_sho']} | Inv Coverage: {selected_fail['inv_coverage_pct']}% | CP Fail Rate: {selected_fail['cp_fail_rate_pct']}%")
+
+        with st.expander("Debug: Triage Prompt"):
+            st.code(triage_result.get("raw_prompt", "(not captured)"), language="text")
+
+        with st.expander("Debug: Raw Triage Response"):
+            st.code(triage_result.get("raw_content", "(not captured)"), language="json")
+
+    # ---- Display Triage Results ----
     if triage_result and triage_result["ok"] and triage_fail_idx == selected_idx:
         t = triage_result["data"]
         st.divider()
@@ -735,7 +910,7 @@ if fails:
 
         # Priority score + tier
         score = t.get("priority_score", 0)
-        tier = t.get("priority_tier", "UNKNOWN")
+        tier = t.get("priority_tier", "UNKNOWN").upper()
 
         if score > 75:
             score_color = "#fca5a5"
@@ -770,7 +945,7 @@ if fails:
                 unsafe_allow_html=True,
             )
         with col_esc:
-            esc_level = t.get("escalation_level", "NONE")
+            esc_level = t.get("escalation_level", "NONE").upper()
             esc_text = ESCALATION_DISPLAY_FULL.get(esc_level, esc_level)
             st.markdown(
                 f"<div style='text-align:center;padding-top:0.8rem'>"
@@ -795,10 +970,227 @@ if fails:
             tag_html = " ".join(
                 f"<span style='background:#21262d;color:#c9d1d9;padding:0.25rem 0.6rem;"
                 f"border-radius:12px;font-size:0.85rem;margin-right:0.3rem'>"
-                f"{FLAG_DISPLAY.get(f, f)}</span>"
+                f"{FLAG_DISPLAY.get(f.upper() if isinstance(f, str) else f, f)}</span>"
                 for f in flags
             )
             st.markdown(f"**Flags:** {tag_html}", unsafe_allow_html=True)
+
+        # ---- Stage 2: Resolver ----
+        st.divider()
+        run_resolver_btn = st.button("Run Stage 2: Resolution", type="primary")
+
+        if run_resolver_btn:
+            if not _is_connected():
+                st.warning(
+                    "Please test your Ollama connection in the sidebar before running analysis."
+                )
+            else:
+                with st.spinner("Stage 2: Generating resolution plan..."):
+                    res_result = call_resolver(
+                        st.session_state["ollama_url"], selected_fail, t
+                    )
+                if res_result["ok"]:
+                    st.session_state["resolver_result"] = res_result
+                    st.session_state["resolver_fail_idx"] = selected_idx
+                else:
+                    st.error(res_result["error"])
+
+        # ---- Debug Expanders (Stage 2) ----
+        resolver_result = st.session_state.get("resolver_result")
+        resolver_fail_idx = st.session_state.get("resolver_fail_idx")
+
+        if resolver_result and resolver_fail_idx == selected_idx:
+            with st.expander("Debug: Resolver Prompt"):
+                st.code(
+                    resolver_result.get("raw_prompt", "(not captured)"),
+                    language="json",
+                )
+
+            with st.expander("Debug: Raw Resolver Response"):
+                st.code(
+                    resolver_result.get("raw_content", "(not captured)"),
+                    language="text",
+                )
+
+            if resolver_result.get("ok"):
+                with st.expander("Debug: Parsed Resolver JSON"):
+                    st.json(resolver_result["data"])
+
+        # ---- Display Resolver Results ----
+        if (
+            resolver_result
+            and resolver_result.get("ok")
+            and resolver_fail_idx == selected_idx
+        ):
+            r = resolver_result["data"]
+            dtc_map = st.session_state.get("dtc_firm_map", {})
+
+            st.divider()
+            st.subheader("Pipeline Flow: Triage → Resolution")
+
+            left_col, right_col = st.columns(2)
+
+            with left_col:
+                st.markdown("#### Stage 1: Triage")
+                st.markdown(f"**Priority Score:** {t.get('priority_score', '—')}")
+                st.markdown(
+                    f"**Priority Tier:** "
+                    f"{TIER_DISPLAY.get(t.get('priority_tier', '').upper(), t.get('priority_tier', '—'))}"
+                )
+                esc_lvl = t.get("escalation_level", "NONE").upper()
+                st.markdown(
+                    f"**Escalation:** {ESCALATION_DISPLAY_FULL.get(esc_lvl, esc_lvl)}"
+                )
+                triage_flags = t.get("flags", [])
+                if triage_flags:
+                    st.markdown(
+                        "**Flags:** "
+                        + ", ".join(
+                            FLAG_DISPLAY.get(fl.upper() if isinstance(fl, str) else fl, fl)
+                            for fl in triage_flags
+                        )
+                    )
+
+            with right_col:
+                st.markdown("#### Stage 2: Resolution")
+                steps = r.get("resolution_steps", [])
+                st.markdown(f"**Steps:** {len(steps)}")
+                total_cov = r.get("total_coverable", 0) or 0
+                ftd = selected_fail["ftd_qty"]
+                cov_pct = round(total_cov / ftd * 100, 1) if ftd > 0 else 0
+                st.markdown(
+                    f"**Coverage:** {cov_pct}% ({total_cov:,} / {ftd:,} shares)"
+                )
+                st.markdown(
+                    f"**Gridlock:** {'Yes' if r.get('gridlock_detected') else 'No'}"
+                )
+                st.markdown(
+                    f"**Escalation:** "
+                    f"{'Required' if r.get('escalation_required') else 'Not required'}"
+                )
+
+            # Resolution Steps
+            st.divider()
+            st.subheader("Resolution Steps")
+
+            for step in steps:
+                step_num = step.get("step", "?")
+                action = step.get("action", "UNKNOWN").upper()
+                action_text = ACTION_DISPLAY.get(action, action)
+                qty = step.get("qty", 0) or 0
+                dtc_code = step.get("dtc", "")
+                firm = _dtc_to_firm(dtc_code, dtc_map) if dtc_code else ""
+                stype = step.get("settlement_type", "")
+                sdate = step.get("settlement_date", "")
+                coverage = step.get("coverage_after_step_pct", 0) or 0
+                remaining = step.get("remaining_short", 0) or 0
+                rationale = step.get("rationale", "")
+
+                firm_text = f" ({firm})" if firm and firm != dtc_code else ""
+                detail_parts = []
+                if stype:
+                    detail_parts.append(stype)
+                if sdate:
+                    detail_parts.append(sdate)
+                detail_text = (
+                    f" [{', '.join(detail_parts)}]" if detail_parts else ""
+                )
+
+                st.markdown(
+                    f"**Step {step_num}:** {action_text} — "
+                    f"{qty:,} shares from {dtc_code}{firm_text}{detail_text}"
+                )
+                if rationale:
+                    st.caption(rationale)
+                st.progress(
+                    min(coverage / 100, 1.0),
+                    text=f"Coverage: {coverage}% | Remaining: {remaining:,} shares",
+                )
+
+            # Coverage Summary
+            st.divider()
+            total_cov = r.get("total_coverable", 0) or 0
+            ftd = selected_fail["ftd_qty"]
+            cov_pct = round(total_cov / ftd * 100, 1) if ftd > 0 else 0
+            residual = r.get("residual_short", 0) or 0
+
+            cov_col, res_col = st.columns(2)
+            with cov_col:
+                if cov_pct >= 100:
+                    cov_color = "#6ee7b7"
+                elif cov_pct >= 75:
+                    cov_color = "#fcd34d"
+                else:
+                    cov_color = "#fca5a5"
+                st.markdown(
+                    f"<div style='text-align:center'>"
+                    f"<span style='font-size:2.5rem;font-weight:700;color:{cov_color}'>"
+                    f"{cov_pct}%</span>"
+                    f"<br><span style='color:#8b949e'>Total Coverage</span></div>",
+                    unsafe_allow_html=True,
+                )
+            with res_col:
+                st.markdown(
+                    f"<div style='text-align:center'>"
+                    f"<span style='font-size:2.5rem;font-weight:700;color:#E6EDF3'>"
+                    f"{residual:,}</span>"
+                    f"<br><span style='color:#8b949e'>Residual Short</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.progress(min(cov_pct / 100, 1.0))
+
+            # Gridlock Banner
+            gridlock = r.get("gridlock_detected", False)
+            gridlock_parties = r.get("gridlock_parties", [])
+            if gridlock:
+                party_names = [_dtc_to_firm(p, dtc_map) for p in gridlock_parties]
+                party_text = ", ".join(party_names) if party_names else "multiple firms"
+                st.error(
+                    f"Delivery gridlock detected involving {len(gridlock_parties)} "
+                    f"firms: {party_text}. Coordinated outreach recommended."
+                )
+            else:
+                st.success("No gridlock detected")
+
+            # Escalation Banner
+            esc_req = r.get("escalation_required", False)
+            esc_reason = r.get("escalation_reason")
+            if esc_req:
+                reason_text = f" — {esc_reason}" if esc_reason else ""
+                st.warning(f"Escalation required{reason_text}")
+            else:
+                st.success("No escalation required")
+
+            # Fallback Strategy
+            fb = r.get("fallback_strategy")
+            fb_qty = r.get("fallback_qty", 0) or 0
+            sfb = r.get("secondary_fallback")
+            sfb_qty = r.get("secondary_fallback_qty", 0) or 0
+
+            if fb:
+                fb_text = FALLBACK_DISPLAY.get(fb, fb.lower().replace("_", " "))
+                parts = [f"If primary steps are insufficient: {fb_text}"]
+                if fb_qty:
+                    parts[0] += f" for {fb_qty:,} shares"
+                if sfb:
+                    sfb_text = FALLBACK_DISPLAY.get(
+                        sfb, sfb.lower().replace("_", " ")
+                    )
+                    sfb_part = f"If still unresolved: {sfb_text}"
+                    if sfb_qty:
+                        sfb_part += f" for {sfb_qty:,} shares"
+                    parts.append(sfb_part)
+                st.markdown(
+                    "**Fallback Strategy:** " + ". ".join(parts) + "."
+                )
+
+            # Narrative
+            narrative = r.get("narrative")
+            if narrative:
+                st.divider()
+                st.subheader("Resolution Summary")
+                st.markdown(narrative)
 
 else:
     st.info("Use the sidebar to generate settlement fail scenarios.")
