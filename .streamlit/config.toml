@@ -1,0 +1,11 @@
+[server]
+port = 8501
+address = "0.0.0.0"
+
+[theme]
+base = "dark"
+primaryColor = "#E63946"
+backgroundColor = "#0D1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#E6EDF3"
+font = "sans serif"
