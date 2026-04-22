@@ -655,8 +655,11 @@ FALLBACK_DISPLAY = {
 }
 
 
-def strip_think_blocks(text):
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+def parse_think_response(text):
+    match = re.search(r"<think>(.*?)</think>(.*)", text, flags=re.DOTALL)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return None, text.strip()
 
 
 def _dtc_to_firm(dtc_code, dtc_firm_map):
@@ -707,10 +710,11 @@ def call_resolver(endpoint_url, fail, triage_data):
         resp = requests.post(url, json=payload, timeout=180)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        cleaned = strip_think_blocks(content)
+        thinking, json_text = parse_think_response(content)
         return {
             "ok": True,
-            "data": json.loads(cleaned),
+            "data": json.loads(json_text),
+            "thinking": thinking,
             "raw_prompt": prompt,
             "raw_content": content,
         }
@@ -1027,6 +1031,11 @@ if fails:
 
             st.divider()
             st.subheader("Pipeline Flow: Triage → Resolution")
+
+            thinking = resolver_result.get("thinking")
+            if thinking:
+                with st.expander("View AI Reasoning"):
+                    st.markdown(thinking)
 
             left_col, right_col = st.columns(2)
 
