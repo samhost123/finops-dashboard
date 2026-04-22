@@ -1,5 +1,6 @@
 """FinOps Resolver — Executive Dashboard (Phase 0: Data Generation & Display)"""
 
+import json
 import random
 import string
 from datetime import date
@@ -465,6 +466,115 @@ def generate_fails(count):
 
 
 # ---------------------------------------------------------------------------
+# Stage 1 — Triage pipeline (Phase 2)
+# ---------------------------------------------------------------------------
+
+TRIAGE_SYSTEM_PROMPT = (
+    "You are a post-trade settlement triage assistant. Given a fail record, "
+    "calculate the priority score using the weighted formula (Age 30%, Value 25%, "
+    "Regulatory 35%, CP History 10%, with Inventory and Concentration modifiers), "
+    "apply category priority hierarchy overrides, classify the fail including CNS "
+    "direction (FTD/FTR), and output a JSON object conforming exactly to the "
+    "required schema. Output JSON only — no explanation, no markdown, no preamble."
+)
+
+FLAG_DISPLAY = {
+    "THRESHOLD_SECURITY": "Regulatory Watchlist Security",
+    "HIGH_VALUE": "High Value Position",
+    "REG_SHO_CLOSE_OUT": "Reg SHO Close-Out Risk",
+    "REG_SHO_CLOSEOUT": "Reg SHO Close-Out Risk",
+    "AGED_FAIL": "Aged Fail",
+    "LARGE_POSITION": "Large Position",
+    "ILLIQUID": "Illiquid Security",
+    "CONCENTRATION_RISK": "Concentration Risk",
+    "PROBLEM_CP": "Problem Counterparty",
+}
+
+ESCALATION_DISPLAY_FULL = {
+    "L1": "Operations Analyst Review",
+    "L2": "Senior Ops Review",
+    "L3": "Management Escalation",
+    "L4": "Compliance Escalation",
+    "NONE": "None",
+}
+
+
+def format_triage_prompt(fail):
+    """Build the pipe-delimited prompt matching triage training data format."""
+    mv = fail["market_value"]
+    if mv >= 1_000_000:
+        mv_str = f"${mv / 1_000_000:.1f}M"
+    else:
+        mv_str = f"${mv:,.0f}"
+
+    parts = [
+        f"CUSIP: {fail['cusip']}",
+        f"Side: {fail['side']}",
+        f"Qty: {fail['ftd_qty']}",
+        f"Counterparty: {fail['dtc']}",
+        f"Age: {fail['age_days']} {'day' if fail['age_days'] == 1 else 'days'}",
+        f"Market Value: {mv_str}",
+    ]
+
+    category = fail["category"]
+    cns_dir = fail["triage"]["cns_direction"]
+
+    if category == "CNS_FAIL":
+        sign = "-" if cns_dir == "FTD" else "+"
+        parts.append(f"CNS Position: {sign}{fail['ftd_qty']}")
+        parts.append(f"CNS Direction: {cns_dir}")
+    elif category == "DVP_FAIL":
+        parts.append("Settlement Type: DVP")
+    elif category == "B2B_PENDING":
+        parts.append("Street-Side Status: Pending")
+    elif category == "CA_EVENT":
+        ca_types = ["Dividend", "Stock Split", "Merger", "Spin-Off"]
+        parts.append(f"CA Type: {random.choice(ca_types)}")
+    elif category == "DK_DISPUTE":
+        reasons = ["Unmatched", "Price Dispute", "Quantity Dispute"]
+        parts.append(f"Dispute Reason: {random.choice(reasons)}")
+
+    parts.append(f"Reg SHO Threshold: {'Yes' if fail['reg_sho'] else 'No'}")
+    parts.append(f"Inventory Coverage: {fail['inv_coverage_pct']}%")
+    parts.append(f"CP 15-day Fail Rate: {fail['cp_fail_rate_pct']}%")
+
+    return "Triage this fail record:\n" + " | ".join(parts)
+
+
+def call_triage(endpoint_url, fail):
+    """Call finops-triage via Ollama /api/chat and return parsed JSON."""
+    url = endpoint_url.rstrip("/") + "/api/chat"
+    prompt = format_triage_prompt(fail)
+    payload = {
+        "model": "finops-triage",
+        "messages": [
+            {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=120)
+        resp.raise_for_status()
+        content = resp.json()["message"]["content"]
+        return {"ok": True, "data": json.loads(content), "raw_prompt": prompt}
+    except requests.exceptions.Timeout:
+        return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
+    except requests.exceptions.ConnectionError:
+        return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return {"ok": False, "error": "Stage 1 returned an unexpected response. Try again."}
+    except Exception:
+        return {"ok": False, "error": "Stage 1 returned an unexpected response. Try again."}
+
+
+def _is_connected():
+    """Check if connection state is confirmed green."""
+    conn = st.session_state.get("conn")
+    return conn is not None and conn["reachable"] and not conn["models_missing"]
+
+
+# ---------------------------------------------------------------------------
 # Streamlit UI
 # ---------------------------------------------------------------------------
 
@@ -584,5 +694,111 @@ if fails:
         hide_index=True,
         height=min(len(fails) * 40 + 50, 600),
     )
+
+    # ---- Row Selection ----
+    st.divider()
+    labels = [
+        f"{i+1}. {f['cusip']} — {f['firm_name']} — {CATEGORY_DISPLAY.get(f['category'], f['category'])}"
+        for i, f in enumerate(fails)
+    ]
+    selected_idx = st.selectbox(
+        "Select a fail to analyze",
+        range(len(fails)),
+        format_func=lambda i: labels[i],
+        key="selected_fail_idx",
+    )
+    selected_fail = fails[selected_idx]
+
+    # ---- Stage 1: Triage ----
+    run_triage_btn = st.button("Run Stage 1: Triage", type="primary")
+
+    if run_triage_btn:
+        if not _is_connected():
+            st.warning("Please test your Ollama connection in the sidebar before running analysis.")
+        else:
+            with st.spinner("Stage 1: Analyzing fail record..."):
+                result = call_triage(st.session_state["ollama_url"], selected_fail)
+            if result["ok"]:
+                st.session_state["triage_result"] = result
+                st.session_state["triage_fail_idx"] = selected_idx
+            else:
+                st.error(result["error"])
+
+    # ---- Display Triage Results ----
+    triage_result = st.session_state.get("triage_result")
+    triage_fail_idx = st.session_state.get("triage_fail_idx")
+
+    if triage_result and triage_result["ok"] and triage_fail_idx == selected_idx:
+        t = triage_result["data"]
+        st.divider()
+        st.subheader("Stage 1: Triage Results")
+
+        # Priority score + tier
+        score = t.get("priority_score", 0)
+        tier = t.get("priority_tier", "UNKNOWN")
+
+        if score > 75:
+            score_color = "#fca5a5"
+        elif score > 50:
+            score_color = "#fcd34d"
+        else:
+            score_color = "#6ee7b7"
+
+        tier_colors = {
+            "CRITICAL": ("#3b1219", "#fca5a5"),
+            "HIGH": ("#3b2408", "#fcd34d"),
+            "MEDIUM": ("#0b3d2e", "#6ee7b7"),
+            "LOW": ("#0d2818", "#86efac"),
+        }
+        tier_bg, tier_fg = tier_colors.get(tier, ("#161B22", "#E6EDF3"))
+
+        col_score, col_tier, col_esc = st.columns(3)
+        with col_score:
+            st.markdown(
+                f"<div style='text-align:center'>"
+                f"<span style='font-size:3rem;font-weight:700;color:{score_color}'>{score}</span>"
+                f"<br><span style='color:#8b949e'>Priority Score</span></div>",
+                unsafe_allow_html=True,
+            )
+        with col_tier:
+            st.markdown(
+                f"<div style='text-align:center;padding-top:0.5rem'>"
+                f"<span style='background:{tier_bg};color:{tier_fg};padding:0.4rem 1.2rem;"
+                f"border-radius:6px;font-size:1.2rem;font-weight:600'>"
+                f"{TIER_DISPLAY.get(tier, tier)}</span>"
+                f"<br><br><span style='color:#8b949e'>Priority Tier</span></div>",
+                unsafe_allow_html=True,
+            )
+        with col_esc:
+            esc_level = t.get("escalation_level", "NONE")
+            esc_text = ESCALATION_DISPLAY_FULL.get(esc_level, esc_level)
+            st.markdown(
+                f"<div style='text-align:center;padding-top:0.8rem'>"
+                f"<span style='font-size:1.3rem;font-weight:600;color:#E6EDF3'>{esc_text}</span>"
+                f"<br><span style='color:#8b949e'>Escalation Level</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Reason
+        reason = t.get("reason", "")
+        if reason:
+            st.markdown(f"**Assessment:** {reason}")
+
+        # Deadline
+        deadline = t.get("deadline")
+        if deadline:
+            st.markdown(f"**Close-out deadline:** {deadline}")
+
+        # Flags
+        flags = t.get("flags", [])
+        if flags:
+            tag_html = " ".join(
+                f"<span style='background:#21262d;color:#c9d1d9;padding:0.25rem 0.6rem;"
+                f"border-radius:12px;font-size:0.85rem;margin-right:0.3rem'>"
+                f"{FLAG_DISPLAY.get(f, f)}</span>"
+                for f in flags
+            )
+            st.markdown(f"**Flags:** {tag_html}", unsafe_allow_html=True)
+
 else:
     st.info("Use the sidebar to generate settlement fail scenarios.")
