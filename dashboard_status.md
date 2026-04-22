@@ -100,7 +100,7 @@ Per `plan.md`:
 
 ### Models
 - `finops-triage` — Qwen3.5-9B, ~5.7GB GGUF, scores/classifies fails
-- `finops-resolver` — Qwen3.5-4B, ~2.5GB GGUF, recommends resolution steps
+- `finops-resolver` — Qwen3-8B, ~5.0GB GGUF, recommends resolution steps, enabled thinking tokens
 - Both run via Ollama at `http://localhost:11434`
 - Resolver outputs `<think>` blocks before JSON — dashboard preserves and displays them
 

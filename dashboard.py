@@ -1,10 +1,11 @@
-"""FinOps Resolver — Executive Dashboard (Phase 0: Data Generation & Display)"""
+"""FinOps Resolver — Post-Trade Fail Desk"""
 
 import json
 import random
 import re
 import string
-from datetime import date
+from datetime import date, datetime
+from html import escape as _esc
 
 import pandas as pd
 import requests
@@ -131,20 +132,18 @@ EXECUTION_BROKERS = [
     "Janney Montgomery Scott", "Ladenburg Thalmann",
 ]
 
-# Top-broker DTC numbers from triage CLAUDE.md (40% of assignments)
 TOP_BROKER_DTCS = [
     "0005", "0050", "0062", "0089", "0161", "0164", "0188",
     "0226", "0235", "0352", "0385", "0417", "0443", "0499", "0551",
 ]
 
-# Well-known real CUSIPs for realistic display
 CUSIP_POOL = [
     "594918104",  # MSFT
     "037833100",  # AAPL
     "67066G104",  # NVDA
     "02079K107",  # GOOG
     "023135106",  # AMZN
-    "30231G102",  # META
+    "30231G102",  # XOM
     "88160R101",  # TSLA
     "46625H100",  # JPM
     "78462F103",  # SPY
@@ -464,7 +463,6 @@ def generate_fail(dtc_firm_map):
         if rf["dtc"] not in dtc_firm_map:
             dtc_firm_map[rf["dtc"]] = random.choice(EXECUTION_BROKERS)
 
-    # Escalation risk label
     tier = triage["priority_tier"]
     esc = triage["escalation_level"]
     if tier == "CRITICAL":
@@ -741,465 +739,983 @@ def call_resolver(endpoint_url, fail, triage_data):
 
 
 # ---------------------------------------------------------------------------
+# Display support — CUSIP info, helpers
+# ---------------------------------------------------------------------------
+
+CUSIP_INFO = {
+    "594918104": ("MSFT", "Microsoft"),
+    "037833100": ("AAPL", "Apple Inc."),
+    "67066G104": ("NVDA", "NVIDIA"),
+    "02079K107": ("GOOGL", "Alphabet"),
+    "023135106": ("AMZN", "Amazon"),
+    "30231G102": ("XOM", "ExxonMobil"),
+    "88160R101": ("TSLA", "Tesla"),
+    "46625H100": ("JPM", "JPMorgan Chase"),
+    "78462F103": ("SPY", "SPDR S&P 500"),
+    "464287655": ("HD", "Home Depot"),
+    "571748102": ("MRK", "Merck & Co."),
+    "500754106": ("KO", "Coca-Cola"),
+    "254709108": ("DIS", "Walt Disney"),
+    "585055106": ("MCD", "McDonald's"),
+    "742718109": ("PG", "Procter & Gamble"),
+    "756109104": ("RTX", "RTX Corp"),
+    "172967424": ("CSCO", "Cisco Systems"),
+    "68389X105": ("ORCL", "Oracle Corp"),
+    "448055102": ("HUM", "Humana"),
+    "29379V103": ("EPD", "Enterprise Products"),
+    "345370860": ("F", "Ford Motor"),
+    "895728102": ("TRV", "Travelers"),
+    "624756102": ("MSCI", "MSCI Inc."),
+    "084670702": ("BRK.B", "Berkshire Hathaway"),
+    "713448108": ("PEP", "PepsiCo"),
+}
+
+
+def _ticker(cusip):
+    return CUSIP_INFO.get(cusip, (cusip[:6], cusip))[0]
+
+
+def _ticker_name(cusip):
+    return CUSIP_INFO.get(cusip, (cusip[:6], cusip))[1]
+
+
+def _is_prime(firm):
+    return firm in PRIME_BROKERS
+
+
+def _has_gridlock(fail):
+    return len(fail.get("related_fails", [])) > 0
+
+
+def _reg_sho_days(fail):
+    return max(1, 13 - fail["age_days"]) if fail["reg_sho"] else None
+
+
+def _fmt_mv(val):
+    if val >= 1_000_000:
+        return f"${val / 1_000_000:.2f}M"
+    if val >= 1_000:
+        return f"${val / 1_000:.0f}K"
+    return f"${val:,.0f}"
+
+
+def _age_cls(age):
+    if age >= 10:
+        return "age-crit"
+    if age >= 7:
+        return "age-warn"
+    if age >= 4:
+        return "age-ok"
+    return "age-fresh"
+
+
+def _pri_cls(score):
+    if score >= 76:
+        return "crit"
+    if score >= 51:
+        return "warn"
+    if score >= 26:
+        return "ok"
+    return ""
+
+
+def _sort_fails(fails):
+    order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    return sorted(
+        fails,
+        key=lambda f: (order.get(f["priority_tier"], 4), -f["age_days"], -f["priority_score"]),
+    )
+
+
+def _apply_filter(fails, filt):
+    if filt == "ALL":
+        return fails
+    if filt == "REG SHO":
+        return [f for f in fails if f["reg_sho"]]
+    if filt == "GRIDLOCK":
+        return [f for f in fails if _has_gridlock(f)]
+    return [f for f in fails if f["priority_tier"] == filt]
+
+
+# ---------------------------------------------------------------------------
+# CSS Theme — ported from FinOps Resolver HTML design
+# ---------------------------------------------------------------------------
+
+THEME_CSS = """<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+    --fo-bg: #0a0b0d;
+    --fo-panel: #101217;
+    --fo-panel-2: #151823;
+    --fo-panel-3: #1b1f2a;
+    --fo-hair: #20242f;
+    --fo-hair-2: #2a2f3d;
+    --fo-text: #d7dae1;
+    --fo-text-dim: #8a8f9c;
+    --fo-text-mute: #5a5f6c;
+    --fo-accent: #4ED6C9;
+    --fo-accent-ink: #0a0b0d;
+    --fo-crit: #ff5a5f;
+    --fo-crit-bg: rgba(255,90,95,0.10);
+    --fo-warn: #ffb547;
+    --fo-warn-bg: rgba(255,181,71,0.10);
+    --fo-ok: #52d18a;
+    --fo-ok-bg: rgba(82,209,138,0.10);
+    --fo-fresh: #2f8a5a;
+    --fo-fresh-bg: rgba(47,138,90,0.12);
+    --fo-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+    --fo-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* === Streamlit overrides === */
+.stApp { background: var(--fo-bg) !important; }
+header[data-testid="stHeader"] { display: none !important; }
+footer { display: none !important; }
+.stDeployButton { display: none !important; }
+.block-container {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    max-width: 100% !important;
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+}
+section[data-testid="stSidebar"] { display: none !important; }
+[data-testid="stHorizontalBlock"] { gap: 0 !important; }
+hr { border-color: var(--fo-hair) !important; opacity: 1 !important; }
+
+/* Column border */
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+    border-right: 1px solid var(--fo-hair);
+    padding-right: 0 !important;
+}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+    padding-left: 0 !important;
+}
+
+/* Selectbox */
+.stSelectbox label { display: none !important; }
+.stSelectbox [data-baseweb="select"] {
+    font-family: var(--fo-mono) !important;
+    font-size: 11px !important;
+}
+
+/* Radio buttons */
+.stRadio > div { flex-wrap: wrap !important; }
+.stRadio label span {
+    font-family: var(--fo-mono) !important;
+    font-size: 10px !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+}
+
+/* Buttons */
+.stButton > button {
+    font-family: var(--fo-mono) !important;
+    font-size: 10.5px !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    border-radius: 3px !important;
+}
+
+/* Expander */
+[data-testid="stExpander"] {
+    background: var(--fo-panel-2) !important;
+    border: 1px solid var(--fo-hair) !important;
+    border-radius: 0 !important;
+}
+[data-testid="stExpander"] summary span {
+    font-family: var(--fo-mono) !important;
+    font-size: 10px !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: var(--fo-text-dim) !important;
+}
+
+/* === Top bar === */
+.fo-topbar {
+    display: flex; align-items: center;
+    background: var(--fo-panel);
+    border-bottom: 1px solid var(--fo-hair);
+    padding: 10px 14px; gap: 14px;
+}
+.fo-brand { display: flex; align-items: center; gap: 10px; }
+.fo-brand-mark {
+    width: 22px; height: 22px; border-radius: 3px;
+    background: var(--fo-accent); color: var(--fo-accent-ink);
+    display: grid; place-items: center;
+    font-family: var(--fo-mono); font-weight: 700; font-size: 13px;
+}
+.fo-brand-name { font-family: var(--fo-mono); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; color: var(--fo-text); }
+.fo-brand-sub { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.06em; color: var(--fo-text-dim); }
+.fo-top-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.fo-status-cluster { display: flex; gap: 16px; font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-dim); }
+.fo-status-item { display: flex; align-items: center; gap: 6px; }
+.fo-label { color: var(--fo-text-mute); letter-spacing: 0.1em; text-transform: uppercase; }
+.fo-val { color: var(--fo-text); }
+.fo-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.fo-dot.ok { background: var(--fo-ok); box-shadow: 0 0 6px var(--fo-ok); }
+.fo-dot.warn { background: var(--fo-warn); box-shadow: 0 0 6px var(--fo-warn); }
+
+/* === KPI strip === */
+.fo-kpis {
+    display: grid; grid-template-columns: repeat(7, 1fr);
+    background: var(--fo-panel);
+    border-bottom: 1px solid var(--fo-hair);
+}
+.fo-kpi {
+    padding: 10px 14px; border-right: 1px solid var(--fo-hair);
+    display: flex; flex-direction: column; gap: 4px;
+}
+.fo-kpi:last-child { border-right: 0; }
+.fo-kpi-label { font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fo-text-dim); }
+.fo-kpi-val { font-family: var(--fo-mono); font-size: 22px; font-weight: 500; color: var(--fo-text); line-height: 1; }
+.fo-kpi-val.crit { color: var(--fo-crit); }
+.fo-kpi-val.warn { color: var(--fo-warn); }
+.fo-kpi-val.ok { color: var(--fo-ok); }
+.fo-kpi-sub { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-mute); }
+
+/* === Queue table === */
+.fo-queue-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; background: var(--fo-panel);
+    border-bottom: 1px solid var(--fo-hair);
+}
+.fo-panel-title { font-family: var(--fo-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fo-text); }
+.fo-panel-sub { font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-dim); margin-left: 8px; }
+.fo-queue-scroll { overflow: auto; max-height: calc(100vh - 320px); min-height: 300px; }
+
+table.fo-qtab {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-family: var(--fo-mono); font-size: 11px;
+}
+table.fo-qtab thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--fo-panel); color: var(--fo-text-dim);
+    font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: 9.5px; padding: 7px 8px; text-align: left;
+    border-bottom: 1px solid var(--fo-hair-2); white-space: nowrap;
+}
+table.fo-qtab thead th.r { text-align: right; }
+table.fo-qtab tbody td {
+    padding: 6px 8px; border-bottom: 1px solid var(--fo-hair);
+    white-space: nowrap; vertical-align: middle; color: var(--fo-text);
+}
+table.fo-qtab tbody td.r { text-align: right; }
+table.fo-qtab tbody tr.is-sel {
+    background: rgba(78,214,201,0.06);
+    box-shadow: inset 3px 0 0 var(--fo-accent);
+}
+
+.fo-tdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.fo-tdot.tier-critical { background: var(--fo-crit); box-shadow: 0 0 5px var(--fo-crit); }
+.fo-tdot.tier-high { background: var(--fo-warn); }
+.fo-tdot.tier-medium { background: var(--fo-ok); }
+.fo-tdot.tier-low { background: var(--fo-fresh); }
+.fo-tn { font-size: 10px; letter-spacing: 0.08em; }
+.fo-tn.tier-critical { color: var(--fo-crit); }
+.fo-tn.tier-high { color: var(--fo-warn); }
+.fo-tn.tier-medium { color: var(--fo-ok); }
+.fo-tn.tier-low { color: var(--fo-fresh); }
+
+.fo-age-pill { display: inline-block; min-width: 30px; padding: 2px 6px; text-align: center; border-radius: 2px; font-size: 10.5px; }
+.fo-age-pill.age-crit { background: var(--fo-crit-bg); color: var(--fo-crit); }
+.fo-age-pill.age-warn { background: var(--fo-warn-bg); color: var(--fo-warn); }
+.fo-age-pill.age-ok { background: var(--fo-ok-bg); color: var(--fo-ok); }
+.fo-age-pill.age-fresh { background: var(--fo-fresh-bg); color: var(--fo-fresh); }
+
+.fo-rs-pill { background: var(--fo-crit-bg); color: var(--fo-crit); padding: 1px 5px; border-radius: 2px; font-size: 10px; }
+.fo-cov-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.fo-spark { background: var(--fo-panel-3); border-radius: 1px; overflow: hidden; display: inline-block; }
+.fo-spark-fill { height: 100%; display: block; }
+.fo-cov-n { color: var(--fo-text-dim); font-size: 10px; }
+.fo-cp-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.fo-cp-dot.prime { background: var(--fo-accent); }
+.fo-cp-dot.exec { background: var(--fo-text-mute); }
+.fo-fchips { display: inline-flex; gap: 4px; }
+.fo-fchip { font-size: 9px; letter-spacing: 0.04em; padding: 1px 5px; border: 1px solid var(--fo-hair-2); color: var(--fo-text-dim); border-radius: 2px; }
+.fo-fchip-more { font-size: 9px; color: var(--fo-text-mute); padding: 1px 3px; }
+.fo-ai-done { color: var(--fo-accent); }
+.fo-ai-pending { color: var(--fo-text-mute); }
+.fo-sym { color: var(--fo-text); }
+.fo-cusip { color: var(--fo-text-mute); font-size: 9.5px; }
+
+/* === Detail panel === */
+.fo-detail-head {
+    padding: 12px 16px; background: var(--fo-panel);
+    border-bottom: 1px solid var(--fo-hair);
+}
+.fo-fid-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.fo-fid-label { font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--fo-text-mute); }
+.fo-fid-value { font-family: var(--fo-mono); font-size: 12px; color: var(--fo-text); }
+.fo-chip {
+    font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.1em;
+    padding: 2px 7px; border-radius: 2px; text-transform: uppercase;
+    display: inline-block;
+}
+.fo-chip.tier-critical { background: var(--fo-crit-bg); color: var(--fo-crit); }
+.fo-chip.tier-high { background: var(--fo-warn-bg); color: var(--fo-warn); }
+.fo-chip.tier-medium { background: var(--fo-ok-bg); color: var(--fo-ok); }
+.fo-chip.tier-low { background: var(--fo-fresh-bg); color: var(--fo-fresh); }
+.fo-chip-regsho { background: var(--fo-crit-bg); color: var(--fo-crit); }
+.fo-chip-gridlock { background: var(--fo-warn-bg); color: var(--fo-warn); }
+
+.fo-fail-title { font-family: var(--fo-mono); font-size: 18px; font-weight: 500; color: var(--fo-text); margin: 0 0 4px; }
+.fo-fail-sub { font-family: var(--fo-mono); font-size: 10.5px; color: var(--fo-text-dim); letter-spacing: 0.04em; }
+
+/* === Metric strip === */
+.fo-mstrip {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    background: var(--fo-panel); border-bottom: 1px solid var(--fo-hair);
+}
+.fo-ms { padding: 10px 12px; border-right: 1px solid var(--fo-hair); display: flex; flex-direction: column; gap: 3px; }
+.fo-ms:last-child { border-right: 0; }
+.fo-ms-l { font-family: var(--fo-mono); font-size: 9px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; }
+.fo-ms-v { font-family: var(--fo-mono); font-size: 20px; font-weight: 500; color: var(--fo-text); line-height: 1; }
+.fo-ms-v.crit { color: var(--fo-crit); }
+.fo-ms-v.warn { color: var(--fo-warn); }
+.fo-ms-v.ok { color: var(--fo-ok); }
+.fo-ms-v .sm { font-size: 12px; color: var(--fo-text-dim); font-weight: 400; }
+.fo-ms-s { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-mute); }
+.fo-cov-bar { height: 4px; width: 100%; background: var(--fo-panel-3); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.fo-cov-bar-fill { height: 100%; }
+.fo-flag-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.fo-flag-tag {
+    padding: 2px 7px; background: var(--fo-panel-3);
+    border: 1px solid var(--fo-hair-2); border-radius: 2px;
+    font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim);
+}
+
+/* === Stage cards === */
+.fo-stage-card { padding: 14px 18px 22px; }
+.fo-stage-head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--fo-hair);
+}
+.fo-stage-num {
+    width: 28px; height: 28px; border-radius: 3px;
+    background: var(--fo-panel-3); color: var(--fo-accent);
+    font-family: var(--fo-mono); font-weight: 600; font-size: 12px;
+    display: grid; place-items: center;
+}
+.fo-stage-title { font-family: var(--fo-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fo-text); }
+.fo-stage-sub { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim); }
+.fo-assessment { font-family: var(--fo-sans); font-size: 13px; line-height: 1.7; color: var(--fo-text); margin-bottom: 14px; }
+.fo-kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; margin-top: 6px; }
+.fo-kv { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--fo-hair); }
+.fo-kv .k { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+.fo-kv .v { font-family: var(--fo-mono); font-size: 11px; color: var(--fo-text); }
+
+/* Banners */
+.fo-banner {
+    padding: 9px 12px; border-radius: 3px;
+    font-family: var(--fo-mono); font-size: 10.5px;
+    margin-bottom: 12px; letter-spacing: 0.02em; border-left: 3px solid;
+}
+.fo-banner.crit { background: var(--fo-crit-bg); color: var(--fo-crit); border-color: var(--fo-crit); }
+.fo-banner.warn { background: var(--fo-warn-bg); color: var(--fo-warn); border-color: var(--fo-warn); }
+.fo-banner.ok { background: var(--fo-ok-bg); color: var(--fo-ok); border-color: var(--fo-ok); }
+
+/* Steps */
+.fo-steps-title { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.12em; color: var(--fo-text-dim); text-transform: uppercase; margin-bottom: 8px; }
+.fo-steps { list-style: none; padding: 0; margin: 0 0 16px; }
+.fo-steps li { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--fo-hair); align-items: flex-start; }
+.fo-steps li:last-child { border-bottom: 0; }
+.fo-step-n { color: var(--fo-accent); font-size: 11px; min-width: 24px; font-family: var(--fo-mono); }
+.fo-step-t { font-family: var(--fo-sans); font-size: 12.5px; line-height: 1.6; color: var(--fo-text); }
+
+.fo-subhead { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.12em; color: var(--fo-text-dim); text-transform: uppercase; margin: 14px 0 6px; }
+.fo-prose { font-family: var(--fo-sans); font-size: 12.5px; line-height: 1.65; color: var(--fo-text); }
+
+/* Trace */
+.fo-trace-body { font-family: var(--fo-mono); font-size: 10.5px; color: var(--fo-text-dim); line-height: 1.7; }
+.fo-trace-line { display: flex; gap: 10px; padding: 3px 0; }
+.fo-trace-n { color: var(--fo-accent); min-width: 22px; }
+.fo-trace-t { color: var(--fo-text-dim); }
+
+/* Status bar */
+.fo-statusbar {
+    background: var(--fo-panel); border-top: 1px solid var(--fo-hair);
+    display: flex; align-items: center; padding: 4px 14px; gap: 8px;
+    font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-mute);
+    letter-spacing: 0.06em; margin-top: 4px;
+}
+.fo-statusbar .v { color: var(--fo-text-dim); }
+
+/* Empty state */
+.fo-empty { display: flex; align-items: center; justify-content: center; padding: 80px 40px; text-align: center; }
+.fo-empty-k { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.16em; color: var(--fo-text-mute); margin-bottom: 12px; text-transform: uppercase; }
+.fo-empty-h { font-size: 16px; color: var(--fo-text-dim); line-height: 1.5; margin-bottom: 16px; }
+</style>"""
+
+
+# ---------------------------------------------------------------------------
+# HTML renderers
+# ---------------------------------------------------------------------------
+
+def _render_queue_html(fails, selected_idx):
+    rows = []
+    for i, f in enumerate(fails):
+        fail_id = f.get("_id", f"FID-{10000 + i}")
+        ticker = _ticker(f["cusip"])
+        tier = f["priority_tier"]
+        tl = tier.lower()
+        tier_short = tier[:4] if len(tier) > 4 else tier
+        category = CATEGORY_DISPLAY.get(f["category"], f["category"])
+        prime = _is_prime(f["firm_name"])
+        sel = "is-sel" if i == selected_idx else ""
+
+        cov = min(f["inv_coverage_pct"], 100)
+        spark_w = max(2, int(cov * 44 / 100))
+        spark_c = "var(--fo-ok)" if cov >= 70 else "var(--fo-warn)" if cov >= 40 else "var(--fo-crit)"
+
+        rsd = _reg_sho_days(f)
+        rs_cell = f'<span class="fo-rs-pill">T-{rsd}d</span>' if rsd else '<span style="color:var(--fo-text-mute)">—</span>'
+
+        flags = f.get("flags", [])
+        fchips = "".join(f'<span class="fo-fchip">{_esc(fl)}</span>' for fl in flags[:2])
+        fmore = f'<span class="fo-fchip-more">+{len(flags) - 2}</span>' if len(flags) > 2 else ""
+
+        firm_short = f["firm_name"][:22]
+
+        rows.append(f"""<tr class="{sel}">
+<td><span class="fo-tdot tier-{tl}"></span><span class="fo-tn tier-{tl}">{_esc(tier_short)}</span></td>
+<td class="r">{f['priority_score']:.0f}</td>
+<td>{_esc(fail_id)}</td>
+<td><div class="fo-sym">{_esc(ticker)}</div><div class="fo-cusip">{_esc(f['cusip'])}</div></td>
+<td>{_esc(category)}</td>
+<td><span class="fo-cp-dot {'prime' if prime else 'exec'}"></span><span style="font-size:10.5px">{_esc(firm_short)}</span></td>
+<td style="color:var(--fo-text-dim)">{_esc(f['account'])}</td>
+<td class="r">{f['ftd_qty']:,}</td>
+<td class="r">{_fmt_mv(f['market_value'])}</td>
+<td class="r"><span class="fo-age-pill {_age_cls(f['age_days'])}">{f['age_days']}d</span></td>
+<td>{rs_cell}</td>
+<td><div class="fo-cov-wrap"><div class="fo-spark" style="width:44px;height:4px"><div class="fo-spark-fill" style="width:{spark_w}px;background:{spark_c}"></div></div><span class="fo-cov-n">{f['inv_coverage_pct']}%</span></div></td>
+<td><div class="fo-fchips">{fchips}{fmore}</div></td>
+<td><span class="fo-ai-pending">○</span></td>
+</tr>""")
+
+    return f"""<div class="fo-queue-head">
+<span class="fo-panel-title">FAIL QUEUE</span>
+<span class="fo-panel-sub">{len(fails)} fails</span>
+</div>
+<div class="fo-queue-scroll">
+<table class="fo-qtab">
+<thead><tr>
+<th>TIER</th><th class="r">PRI</th><th>ID</th><th>SECURITY</th><th>TYPE</th>
+<th>COUNTERPARTY</th><th>ACCT</th><th class="r">SHARES</th><th class="r">NOTIONAL</th>
+<th class="r">AGE</th><th>REG SHO</th><th>COVERAGE</th><th>FLAGS</th><th>AI</th>
+</tr></thead>
+<tbody>{"".join(rows)}</tbody>
+</table></div>"""
+
+
+def _render_stage1_html(fail, triage_data, is_ai=False):
+    t = triage_data or fail.get("triage", {})
+    reason = t.get("reason", "—")
+    esc_level = t.get("escalation_level", "NONE").upper()
+    esc_text = ESCALATION_DISPLAY_FULL.get(esc_level, esc_level)
+    action = t.get("action", "—")
+    deadline = t.get("deadline", "—")
+    category = CATEGORY_DISPLAY.get(t.get("category", ""), t.get("category", "—"))
+    lifecycle = t.get("lifecycle_state", "—")
+    source_label = "AI Model" if is_ai else "Generated"
+
+    flags = t.get("flags", [])
+    ftags = ""
+    if flags:
+        ftags = '<div class="fo-flag-wrap" style="margin-top:10px">' + "".join(
+            f'<span class="fo-flag-tag">{_esc(FLAG_DISPLAY.get(fl.upper() if isinstance(fl, str) else fl, fl))}</span>'
+            for fl in flags
+        ) + "</div>"
+
+    return f"""<div class="fo-stage-card">
+<header class="fo-stage-head">
+<div class="fo-stage-num">01</div>
+<div><div class="fo-stage-title">TRIAGE MODEL</div><div class="fo-stage-sub">Prioritization · Tier · Flags</div></div>
+<div style="margin-left:auto;font-family:var(--fo-mono);font-size:9.5px;color:var(--fo-text-mute)">{source_label}</div>
+</header>
+<div class="fo-assessment">{_esc(reason)}</div>
+<div class="fo-kv-grid">
+<div class="fo-kv"><span class="k">Escalation</span><span class="v">{_esc(esc_text)}</span></div>
+<div class="fo-kv"><span class="k">Action</span><span class="v">{_esc(action)}</span></div>
+<div class="fo-kv"><span class="k">Category</span><span class="v">{_esc(category)}</span></div>
+<div class="fo-kv"><span class="k">Lifecycle</span><span class="v">{_esc(lifecycle)}</span></div>
+<div class="fo-kv"><span class="k">Deadline</span><span class="v">{_esc(deadline)}</span></div>
+<div class="fo-kv"><span class="k">Account</span><span class="v">{_esc(fail['account'])}</span></div>
+</div>{ftags}</div>"""
+
+
+def _render_stage2_html(fail, resolver_data, dtc_map):
+    r = resolver_data
+    gridlock = r.get("gridlock_detected", False)
+    if gridlock:
+        parties = r.get("gridlock_parties", [])
+        pnames = [_dtc_to_firm(p, dtc_map) for p in parties]
+        ptxt = ", ".join(pnames) if pnames else "multiple firms"
+        banner = f'<div class="fo-banner crit">GRIDLOCK DETECTED — coordinated outreach to {_esc(ptxt)} required.</div>'
+    else:
+        banner = '<div class="fo-banner ok">No gridlock detected. Resolution path is unblocked.</div>'
+
+    steps = r.get("resolution_steps", [])
+    steps_html = ""
+    if steps:
+        items = ""
+        for step in steps:
+            num = step.get("step", "?")
+            action = step.get("action", "UNKNOWN").upper()
+            atxt = ACTION_DISPLAY.get(action, action)
+            qty = step.get("qty", 0) or 0
+            dtc_code = step.get("dtc", "")
+            firm = _dtc_to_firm(dtc_code, dtc_map) if dtc_code else ""
+            ftxt = f" ({_esc(firm)})" if firm and firm != dtc_code else ""
+            items += f'<li><span class="fo-step-n">{str(num).zfill(2)}</span><span class="fo-step-t">{_esc(atxt)} — {qty:,} shares from {_esc(dtc_code)}{ftxt}</span></li>'
+        steps_html = f'<div class="fo-steps-title">RECOMMENDED RESOLUTION STEPS</div><ol class="fo-steps">{items}</ol>'
+
+    fb = r.get("fallback_strategy")
+    fb_html = ""
+    if fb:
+        fb_text = FALLBACK_DISPLAY.get(fb, fb.lower().replace("_", " "))
+        fb_qty = r.get("fallback_qty", 0) or 0
+        sfb = r.get("secondary_fallback")
+        parts = [f"If primary steps are insufficient: {fb_text}"]
+        if fb_qty:
+            parts[0] += f" for {fb_qty:,} shares"
+        if sfb:
+            sfb_text = FALLBACK_DISPLAY.get(sfb, sfb.lower().replace("_", " "))
+            sfb_qty = r.get("secondary_fallback_qty", 0) or 0
+            sfb_part = f"If still unresolved: {sfb_text}"
+            if sfb_qty:
+                sfb_part += f" for {sfb_qty:,} shares"
+            parts.append(sfb_part)
+        fb_html = f'<div class="fo-subhead">FALLBACK STRATEGY</div><div class="fo-prose">{_esc(". ".join(parts) + ".")}</div>'
+
+    narrative = r.get("narrative", "")
+    narr_html = ""
+    if narrative:
+        narr_html = f'<div class="fo-subhead">MODEL NARRATIVE</div><div class="fo-prose">{_esc(narrative)}</div>'
+
+    esc_req = r.get("escalation_required", False)
+    esc_reason = r.get("escalation_reason", "")
+    if esc_req:
+        reason_txt = f" — {_esc(esc_reason)}" if esc_reason else ""
+        esc_html = f'<div class="fo-banner warn" style="margin-top:12px">Escalation required{reason_txt}</div>'
+    else:
+        esc_html = '<div class="fo-banner ok" style="margin-top:12px">No escalation required at this tier.</div>'
+
+    total_cov = r.get("total_coverable", 0) or 0
+    ftd = fail["ftd_qty"]
+    cov_pct = round(total_cov / ftd * 100, 1) if ftd > 0 else 0
+    residual = r.get("residual_short", 0) or 0
+
+    cov_color = "var(--fo-ok)" if cov_pct >= 100 else "var(--fo-warn)" if cov_pct >= 75 else "var(--fo-crit)"
+    cov_summary = f"""<div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin:12px 0;background:var(--fo-panel);border:1px solid var(--fo-hair);border-radius:3px">
+<div style="padding:10px 12px;border-right:1px solid var(--fo-hair);text-align:center">
+<div style="font-family:var(--fo-mono);font-size:24px;font-weight:500;color:{cov_color}">{cov_pct}%</div>
+<div style="font-family:var(--fo-mono);font-size:9px;color:var(--fo-text-mute);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px">Total Coverage</div>
+</div>
+<div style="padding:10px 12px;text-align:center">
+<div style="font-family:var(--fo-mono);font-size:24px;font-weight:500;color:var(--fo-text)">{residual:,}</div>
+<div style="font-family:var(--fo-mono);font-size:9px;color:var(--fo-text-mute);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px">Residual Short</div>
+</div></div>"""
+
+    return f"""<div class="fo-stage-card">
+<header class="fo-stage-head">
+<div class="fo-stage-num">02</div>
+<div><div class="fo-stage-title">RESOLUTION MODEL</div><div class="fo-stage-sub">Action plan · Fallback · Narrative</div></div>
+<div style="margin-left:auto;font-family:var(--fo-mono);font-size:9.5px;color:var(--fo-text-mute)">AI Model</div>
+</header>
+{banner}{steps_html}{cov_summary}{fb_html}{narr_html}{esc_html}</div>"""
+
+
+# ---------------------------------------------------------------------------
 # Streamlit UI
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="FinOps Settlement Dashboard",
-    page_icon="\U0001f4ca",
+    page_title="FinOps Resolver — Post-Trade Fail Desk",
+    page_icon="F",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ---- Sidebar ----
-with st.sidebar:
-    st.header("Configuration")
-    st.text_input(
-        "Ollama Endpoint",
-        value="http://localhost:11434",
-        key="ollama_url",
-        help="URL of the Ollama instance hosting finops-triage and finops-resolver models.",
-    )
+st.markdown(THEME_CSS, unsafe_allow_html=True)
 
-    # -- Connection status --
-    test_btn = st.button("Test Connection", use_container_width=True)
-    if test_btn:
-        st.session_state["conn"] = check_ollama_connection(st.session_state["ollama_url"])
-
-    conn = st.session_state.get("conn")
-    if conn is not None:
-        if conn["reachable"] and not conn["models_missing"]:
-            st.success("Connected — both models available")
-        elif conn["reachable"] and conn["models_missing"]:
-            for m in conn["models_missing"]:
-                st.warning(f"{m} is not installed. Run:  `ollama pull {m}`")
-            if conn["models_found"]:
-                st.info(f"Available: {', '.join(conn['models_found'])}")
-        else:
-            st.error(conn["error"])
-
-    st.divider()
-    fail_count = st.slider(
-        "Fails to Generate",
-        min_value=1,
-        max_value=50,
-        value=10,
-        key="fail_count",
-    )
-    generate_btn = st.button("Generate Fails", type="primary", use_container_width=True)
-
-# ---- Title ----
-st.title("Settlement Fail Resolution Dashboard")
-st.caption("Two-model AI pipeline: Triage → Resolver")
-
-# ---- Generate on button click ----
-if generate_btn:
-    fails_generated, dtc_firm_map = generate_fails(fail_count)
-    st.session_state["fails"] = fails_generated
-    st.session_state["dtc_firm_map"] = dtc_firm_map
-    st.session_state.pop("triage_result", None)
-    st.session_state.pop("triage_fail_idx", None)
-    st.session_state.pop("resolver_result", None)
-    st.session_state.pop("resolver_fail_idx", None)
+# ---- Initialise defaults ----
+if "ollama_url" not in st.session_state:
+    st.session_state["ollama_url"] = "http://localhost:11434"
+if "fail_count" not in st.session_state:
+    st.session_state["fail_count"] = 10
+if "filter_val" not in st.session_state:
+    st.session_state["filter_val"] = "ALL"
+if "stage_mode" not in st.session_state:
+    st.session_state["stage_mode"] = "Both"
 
 fails = st.session_state.get("fails", [])
 
-# ---- Summary Metrics ----
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Fails", len(fails) if fails else 0)
-col2.metric("Critical Priority", "—", help="Available after batch analysis")
-col3.metric("Escalation Required", "—", help="Available after batch analysis")
-col4.metric("Avg Coverage", "—", help="Available after batch analysis")
-col5.metric("Gridlock Detected", "—", help="Available after batch analysis")
+# ---- Empty state ----
+if not fails:
+    st.markdown(
+        '<div class="fo-empty"><div>'
+        '<div class="fo-empty-k">NO FAIL DATA</div>'
+        '<div class="fo-empty-h">Generate settlement fail scenarios to begin analysis.</div>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+    gc1, gc2, gc3 = st.columns([1, 0.5, 1])
+    with gc2:
+        fail_count = st.slider("Fails to Generate", min_value=1, max_value=50, value=10, key="fail_count_init")
+        if st.button("GENERATE FAILS", type="primary", use_container_width=True):
+            fails_list, dtc_map = generate_fails(fail_count)
+            for i, f in enumerate(fails_list):
+                f["_id"] = f"FID-{10000 + i}"
+            st.session_state["fails"] = _sort_fails(fails_list)
+            st.session_state["dtc_firm_map"] = dtc_map
+            st.rerun()
+    st.stop()
 
-st.divider()
+# ---- Top bar ----
+conn = st.session_state.get("conn")
+ollama_url = st.session_state.get("ollama_url", "localhost:11434")
+ollama_ok = conn is not None and conn["reachable"] and not conn["models_missing"]
+ollama_reachable = conn is not None and conn["reachable"]
+time_str = datetime.utcnow().strftime("%H:%M:%S")
 
-# ---- Raw Data Table ----
-if fails:
-    rows = []
-    for f in fails:
-        rows.append({
-            "Security": f["cusip"],
-            "Counterparty": f["firm_name"],
-            "Account": f["account"],
-            "Fail Type": CATEGORY_DISPLAY.get(f["category"], f["category"]),
-            "Shares": f"{f['ftd_qty']:,}",
-            "Market Value": _format_market_value(f["market_value"]),
-            "Age (Days)": f["age_days"],
-            "Reg SHO": "Yes" if f["reg_sho"] else "No",
-            "Inventory": f"{f['inv_coverage_pct']}%",
-        })
+st.markdown(
+    f'<div class="fo-topbar">'
+    f'<div class="fo-brand">'
+    f'<div class="fo-brand-mark">F</div>'
+    f'<div><div class="fo-brand-name">FINOPS RESOLVER</div>'
+    f'<div class="fo-brand-sub">POST-TRADE FAILS · INTERNAL</div></div></div>'
+    f'<div class="fo-top-right"><div class="fo-status-cluster">'
+    f'<div class="fo-status-item">'
+    f'<span class="fo-dot {"ok" if ollama_ok else "warn"}"></span>'
+    f'<span class="fo-label">MODEL</span>'
+    f'<span class="fo-val">triage · resolver</span></div>'
+    f'<div class="fo-status-item">'
+    f'<span class="fo-dot {"ok" if ollama_reachable else "warn"}"></span>'
+    f'<span class="fo-label">OLLAMA</span>'
+    f'<span class="fo-val">{_esc(ollama_url)}</span></div>'
+    f'<div class="fo-status-item">'
+    f'<span class="fo-label">UTC</span>'
+    f'<span class="fo-val">{time_str}</span></div>'
+    f'</div></div></div>',
+    unsafe_allow_html=True,
+)
 
-    df = pd.DataFrame(rows)
+# ---- Controls bar ----
+ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([0.5, 2, 1.5, 0.5])
 
-    def _color_age(row):
-        age = row["Age (Days)"]
-        if age >= 10:
-            return ["background-color: #3b1219; color: #fca5a5"] * len(row)
-        elif age >= 7:
-            return ["background-color: #3b2408; color: #fcd34d"] * len(row)
-        elif age >= 4:
-            return ["background-color: #0b3d2e; color: #6ee7b7"] * len(row)
-        else:
-            return ["background-color: #0d2818; color: #86efac"] * len(row)
+with ctrl_c1:
+    fail_count = st.number_input(
+        "Count", min_value=1, max_value=50, value=10, key="fail_count",
+        label_visibility="collapsed",
+    )
+    if st.button("GENERATE", type="primary", use_container_width=True):
+        fails_list, dtc_map = generate_fails(fail_count)
+        for i, f in enumerate(fails_list):
+            f["_id"] = f"FID-{10000 + i}"
+        st.session_state["fails"] = _sort_fails(fails_list)
+        st.session_state["dtc_firm_map"] = dtc_map
+        st.session_state.pop("triage_result", None)
+        st.session_state.pop("triage_fail_id", None)
+        st.session_state.pop("resolver_result", None)
+        st.session_state.pop("resolver_fail_id", None)
+        st.rerun()
 
-    styled = df.style.apply(_color_age, axis=1).set_properties(
-        **{"text-align": "left"}
+with ctrl_c2:
+    st.radio(
+        "Filter",
+        ["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW", "REG SHO", "GRIDLOCK"],
+        horizontal=True,
+        key="filter_val",
+        label_visibility="collapsed",
     )
 
-    st.subheader("Generated Fail Scenarios")
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        height=min(len(fails) * 40 + 50, 600),
+with ctrl_c3:
+    st.radio(
+        "Stage",
+        ["Both", "Stage 1", "Stage 2"],
+        horizontal=True,
+        key="stage_mode",
+        label_visibility="collapsed",
     )
 
-    # ---- Row Selection ----
-    st.divider()
-    labels = [
-        f"{i+1}. {f['cusip']} — {f['firm_name']} — {CATEGORY_DISPLAY.get(f['category'], f['category'])}"
-        for i, f in enumerate(fails)
+with ctrl_c4:
+    conn_btn = st.button("TEST OLLAMA", use_container_width=True)
+    if conn_btn:
+        st.session_state["conn"] = check_ollama_connection(st.session_state["ollama_url"])
+        st.rerun()
+
+# ---- KPI strip ----
+total = len(fails)
+critical = sum(1 for f in fails if f["priority_tier"] == "CRITICAL")
+escalate = sum(1 for f in fails if f["priority_tier"] in ("CRITICAL", "HIGH"))
+avg_cov = round(sum(f["inv_coverage_pct"] for f in fails) / total) if total else 0
+gridlock_n = sum(1 for f in fails if _has_gridlock(f))
+regsho_n = sum(1 for f in fails if f["reg_sho"])
+notional = sum(f["market_value"] for f in fails)
+
+st.markdown(
+    f'<div class="fo-kpis">'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">OPEN FAILS</div>'
+    f'<div class="fo-kpi-val">{total}</div><div class="fo-kpi-sub">monitored</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">CRITICAL</div>'
+    f'<div class="fo-kpi-val{" crit" if critical > 0 else ""}">{critical}</div>'
+    f'<div class="fo-kpi-sub">{round(critical / total * 100) if total else 0}% of book</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">NEEDS ESCALATION</div>'
+    f'<div class="fo-kpi-val{" warn" if escalate > 5 else ""}">{escalate}</div>'
+    f'<div class="fo-kpi-sub">VP + desk supv.</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">AVG COVERAGE</div>'
+    f'<div class="fo-kpi-val">{avg_cov}%</div>'
+    f'<div class="fo-kpi-sub">{"healthy inventory" if avg_cov >= 60 else "thin inventory"}</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">GRIDLOCK</div>'
+    f'<div class="fo-kpi-val{" warn" if gridlock_n > 0 else ""}">{gridlock_n}</div>'
+    f'<div class="fo-kpi-sub">chain-match needed</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">REG SHO</div>'
+    f'<div class="fo-kpi-val{" crit" if regsho_n > 0 else ""}">{regsho_n}</div>'
+    f'<div class="fo-kpi-sub">close-out eligible</div></div>'
+    f'<div class="fo-kpi"><div class="fo-kpi-label">NOTIONAL EXPOSURE</div>'
+    f'<div class="fo-kpi-val">{_fmt_mv(notional)}</div>'
+    f'<div class="fo-kpi-sub">across open book</div></div>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+# ---- Apply filter ----
+filtered = _apply_filter(fails, st.session_state.get("filter_val", "ALL"))
+if not filtered:
+    st.info("No fails match the selected filter.")
+    st.stop()
+
+# ---- Two-pane layout ----
+left_col, right_col = st.columns([1.1, 1], gap="small")
+
+with left_col:
+    options = [
+        f"{f.get('_id', f'FID-{i}')}  ·  {_ticker(f['cusip'])}  ·  "
+        f"{CATEGORY_DISPLAY.get(f['category'], f['category'])}  ·  P:{f['priority_score']:.0f}"
+        for i, f in enumerate(filtered)
     ]
     selected_idx = st.selectbox(
-        "Select a fail to analyze",
-        range(len(fails)),
-        format_func=lambda i: labels[i],
+        "Select fail",
+        range(len(filtered)),
+        format_func=lambda i: options[i],
         key="selected_fail_idx",
+        label_visibility="collapsed",
     )
-    selected_fail = fails[selected_idx]
+    st.markdown(_render_queue_html(filtered, selected_idx), unsafe_allow_html=True)
 
-    # ---- Stage 1: Triage ----
-    run_triage_btn = st.button("Run Stage 1: Triage", type="primary")
+with right_col:
+    fail = filtered[selected_idx]
+    fail_id = fail.get("_id", f"FID-{selected_idx}")
 
-    if run_triage_btn:
-        if not _is_connected():
-            st.warning("Please test your Ollama connection in the sidebar before running analysis.")
-        else:
-            with st.spinner("Stage 1: Analyzing fail record..."):
-                result = call_triage(st.session_state["ollama_url"], selected_fail)
-            if result["ok"]:
-                st.session_state["triage_result"] = result
-                st.session_state["triage_fail_idx"] = selected_idx
-            else:
-                st.error(result["error"])
+    # ---- Detail header ----
+    ticker, name = CUSIP_INFO.get(fail["cusip"], (fail["cusip"][:4], fail["cusip"]))
+    tier = fail["priority_tier"]
+    tl = tier.lower()
+    category_disp = CATEGORY_DISPLAY.get(fail["category"], fail["category"])
+    prime = _is_prime(fail["firm_name"])
+    rsd = _reg_sho_days(fail)
+    rs_chip = f'<span class="fo-chip fo-chip-regsho">REG SHO · T-{rsd}d</span>' if rsd else ""
+    gl_chip = '<span class="fo-chip fo-chip-gridlock">GRIDLOCK</span>' if _has_gridlock(fail) else ""
 
-    # ---- Debug Expanders ----
+    st.markdown(
+        f'<div class="fo-detail-head">'
+        f'<div class="fo-fid-row">'
+        f'<span class="fo-fid-label">FAIL</span>'
+        f'<span class="fo-fid-value">{_esc(fail_id)}</span>'
+        f'<span class="fo-chip tier-{tl}">{_esc(tier)}</span>'
+        f'{rs_chip}{gl_chip}</div>'
+        f'<div class="fo-fail-title">{_esc(category_disp)} · {_esc(ticker)}'
+        f'<span style="color:var(--fo-text-dim);font-weight:400;font-size:13px;margin-left:8px">{_esc(name)}</span></div>'
+        f'<div class="fo-fail-sub">'
+        f'{fail["ftd_qty"]:,} sh · {_fmt_mv(fail["market_value"])} notional'
+        f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
+        f'{_esc(fail["firm_name"])} {"(PB)" if prime else "(Exec)"}'
+        f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
+        f'{_esc(fail["account"])}'
+        f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
+        f'CUSIP {_esc(fail["cusip"])}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Metric strip ----
+    score = fail["priority_score"]
+    pk = _pri_cls(score)
+    cov = fail["inv_coverage_pct"]
+    cov_c = "var(--fo-ok)" if cov >= 70 else "var(--fo-warn)" if cov >= 40 else "var(--fo-crit)"
+    age = fail["age_days"]
+    age_lbl = "past SLA" if age >= 10 else "critical band" if age >= 7 else "in window"
+    esc_lvl = fail["triage"]["escalation_level"]
+    esc_txt = ESCALATION_DISPLAY.get(esc_lvl, esc_lvl)
+
+    fail_flags = fail.get("flags", [])
+    ftags = "".join(
+        f'<span class="fo-flag-tag">{_esc(FLAG_DISPLAY.get(fl, fl))}</span>'
+        for fl in fail_flags
+    )
+
+    st.markdown(
+        f'<div class="fo-mstrip" style="grid-template-columns:repeat(5,1fr) 1.5fr">'
+        f'<div class="fo-ms"><div class="fo-ms-l">PRIORITY</div>'
+        f'<div class="fo-ms-v {pk}" style="font-size:32px">{score:.0f}</div>'
+        f'<div class="fo-ms-s">of 100</div></div>'
+        f'<div class="fo-ms"><div class="fo-ms-l">TIER</div>'
+        f'<div class="fo-ms-v {pk}">{_esc(tier)}</div>'
+        f'<div class="fo-ms-s">{_esc(esc_txt)}</div></div>'
+        f'<div class="fo-ms"><div class="fo-ms-l">AGE</div>'
+        f'<div class="fo-ms-v">{age}<span class="sm"> d</span></div>'
+        f'<div class="fo-ms-s">{age_lbl}</div></div>'
+        f'<div class="fo-ms"><div class="fo-ms-l">COVERAGE</div>'
+        f'<div class="fo-ms-v">{cov}<span class="sm"> %</span></div>'
+        f'<div class="fo-cov-bar"><div class="fo-cov-bar-fill" style="width:{min(cov, 100)}%;background:{cov_c}"></div></div></div>'
+        f'<div class="fo-ms"><div class="fo-ms-l">REG SHO</div>'
+        f'<div class="fo-ms-v">{"T-" + str(rsd) + "d" if rsd else "—"}</div>'
+        f'<div class="fo-ms-s">{"close-out window" if rsd else "no deadline"}</div></div>'
+        f'<div class="fo-ms"><div class="fo-ms-l">FLAGS</div>'
+        f'<div class="fo-flag-wrap">{ftags}</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Stage cards ----
+    sm = st.session_state.get("stage_mode", "Both")
+    show_s1 = sm in ("Both", "Stage 1")
+    show_s2 = sm in ("Both", "Stage 2")
+
     triage_result = st.session_state.get("triage_result")
-    triage_fail_idx = st.session_state.get("triage_fail_idx")
+    triage_fail_id = st.session_state.get("triage_fail_id")
+    has_ai_triage = (
+        triage_result is not None
+        and triage_result.get("ok")
+        and triage_fail_id == fail_id
+    )
 
-    if triage_result and triage_fail_idx == selected_idx:
-        with st.expander("Debug: Selected Fail Verification"):
-            st.write(f"**Dropdown index:** {selected_idx}")
-            st.write(f"**Stored triage_fail_idx:** {triage_fail_idx}")
-            st.write(f"**CUSIP:** {selected_fail['cusip']}")
-            st.write(f"**Firm:** {selected_fail['firm_name']}")
-            st.write(f"**Category:** {selected_fail['category']}")
-            st.write(f"**Generated priority_tier:** {selected_fail['priority_tier']}")
-            st.write(f"**Generated priority_score:** {selected_fail['priority_score']}")
-            st.write(f"**Age:** {selected_fail['age_days']}d | Market Value: {_format_market_value(selected_fail['market_value'])}")
-            st.write(f"**Reg SHO:** {selected_fail['reg_sho']} | Inv Coverage: {selected_fail['inv_coverage_pct']}% | CP Fail Rate: {selected_fail['cp_fail_rate_pct']}%")
+    resolver_result = st.session_state.get("resolver_result")
+    resolver_fail_id = st.session_state.get("resolver_fail_id")
+    has_ai_resolver = (
+        resolver_result is not None
+        and resolver_result.get("ok")
+        and resolver_fail_id == fail_id
+    )
 
-        with st.expander("Debug: Triage Prompt"):
-            st.code(triage_result.get("raw_prompt", "(not captured)"), language="text")
+    if show_s1 and show_s2:
+        sc1, sc2 = st.columns(2)
+    elif show_s1:
+        sc1 = st.container()
+        sc2 = None
+    else:
+        sc1 = None
+        sc2 = st.container()
 
-        with st.expander("Debug: Raw Triage Response"):
-            st.code(triage_result.get("raw_content", "(not captured)"), language="json")
-
-    # ---- Display Triage Results ----
-    if triage_result and triage_result["ok"] and triage_fail_idx == selected_idx:
-        t = triage_result["data"]
-        st.divider()
-        st.subheader("Stage 1: Triage Results")
-
-        # Priority score + tier
-        score = t.get("priority_score", 0)
-        tier = t.get("priority_tier", "UNKNOWN").upper()
-
-        if score > 75:
-            score_color = "#fca5a5"
-        elif score > 50:
-            score_color = "#fcd34d"
-        else:
-            score_color = "#6ee7b7"
-
-        tier_colors = {
-            "CRITICAL": ("#3b1219", "#fca5a5"),
-            "HIGH": ("#3b2408", "#fcd34d"),
-            "MEDIUM": ("#0b3d2e", "#6ee7b7"),
-            "LOW": ("#0d2818", "#86efac"),
-        }
-        tier_bg, tier_fg = tier_colors.get(tier, ("#161B22", "#E6EDF3"))
-
-        col_score, col_tier, col_esc = st.columns(3)
-        with col_score:
+    # -- Stage 1 --
+    if show_s1 and sc1 is not None:
+        with sc1:
+            tdata = triage_result["data"] if has_ai_triage else fail.get("triage", {})
             st.markdown(
-                f"<div style='text-align:center'>"
-                f"<span style='font-size:3rem;font-weight:700;color:{score_color}'>{score}</span>"
-                f"<br><span style='color:#8b949e'>Priority Score</span></div>",
+                _render_stage1_html(fail, tdata, is_ai=has_ai_triage),
                 unsafe_allow_html=True,
             )
-        with col_tier:
-            st.markdown(
-                f"<div style='text-align:center;padding-top:0.5rem'>"
-                f"<span style='background:{tier_bg};color:{tier_fg};padding:0.4rem 1.2rem;"
-                f"border-radius:6px;font-size:1.2rem;font-weight:600'>"
-                f"{TIER_DISPLAY.get(tier, tier)}</span>"
-                f"<br><br><span style='color:#8b949e'>Priority Tier</span></div>",
-                unsafe_allow_html=True,
-            )
-        with col_esc:
-            esc_level = t.get("escalation_level", "NONE").upper()
-            esc_text = ESCALATION_DISPLAY_FULL.get(esc_level, esc_level)
-            st.markdown(
-                f"<div style='text-align:center;padding-top:0.8rem'>"
-                f"<span style='font-size:1.3rem;font-weight:600;color:#E6EDF3'>{esc_text}</span>"
-                f"<br><span style='color:#8b949e'>Escalation Level</span></div>",
-                unsafe_allow_html=True,
-            )
+            if not has_ai_triage:
+                if st.button("▶  RUN STAGE 1: TRIAGE", key="run_triage", use_container_width=True):
+                    if not _is_connected():
+                        st.warning("Test your Ollama connection first (TEST OLLAMA button).")
+                    else:
+                        with st.spinner("Stage 1: Analyzing fail record..."):
+                            result = call_triage(st.session_state["ollama_url"], fail)
+                        if result["ok"]:
+                            st.session_state["triage_result"] = result
+                            st.session_state["triage_fail_id"] = fail_id
+                            st.rerun()
+                        else:
+                            st.error(result["error"])
+            if has_ai_triage:
+                with st.expander("DEBUG: TRIAGE PROMPT"):
+                    st.code(triage_result.get("raw_prompt", ""), language="text")
+                with st.expander("DEBUG: RAW TRIAGE RESPONSE"):
+                    st.code(triage_result.get("raw_content", ""), language="json")
 
-        # Reason
-        reason = t.get("reason", "")
-        if reason:
-            st.markdown(f"**Assessment:** {reason}")
-
-        # Deadline
-        deadline = t.get("deadline")
-        if deadline:
-            st.markdown(f"**Close-out deadline:** {deadline}")
-
-        # Flags
-        flags = t.get("flags", [])
-        if flags:
-            tag_html = " ".join(
-                f"<span style='background:#21262d;color:#c9d1d9;padding:0.25rem 0.6rem;"
-                f"border-radius:12px;font-size:0.85rem;margin-right:0.3rem'>"
-                f"{FLAG_DISPLAY.get(f.upper() if isinstance(f, str) else f, f)}</span>"
-                for f in flags
-            )
-            st.markdown(f"**Flags:** {tag_html}", unsafe_allow_html=True)
-
-        # ---- Stage 2: Resolver ----
-        st.divider()
-        run_resolver_btn = st.button("Run Stage 2: Resolution", type="primary")
-
-        if run_resolver_btn:
-            if not _is_connected():
-                st.warning(
-                    "Please test your Ollama connection in the sidebar before running analysis."
-                )
-            else:
-                with st.spinner("Stage 2: Generating resolution plan..."):
-                    res_result = call_resolver(
-                        st.session_state["ollama_url"], selected_fail, t
-                    )
-                if res_result["ok"]:
-                    st.session_state["resolver_result"] = res_result
-                    st.session_state["resolver_fail_idx"] = selected_idx
-                else:
-                    st.error(res_result["error"])
-
-        # ---- Debug Expanders (Stage 2) ----
-        resolver_result = st.session_state.get("resolver_result")
-        resolver_fail_idx = st.session_state.get("resolver_fail_idx")
-
-        if resolver_result and resolver_fail_idx == selected_idx:
-            with st.expander("Debug: Resolver Prompt"):
-                st.code(
-                    resolver_result.get("raw_prompt", "(not captured)"),
-                    language="json",
-                )
-
-            with st.expander("Debug: Raw Resolver Response"):
-                st.code(
-                    resolver_result.get("raw_content", "(not captured)"),
-                    language="text",
-                )
-
-            if resolver_result.get("ok"):
-                with st.expander("Debug: Parsed Resolver JSON"):
-                    st.json(resolver_result["data"])
-
-        # ---- Display Resolver Results ----
-        if (
-            resolver_result
-            and resolver_result.get("ok")
-            and resolver_fail_idx == selected_idx
-        ):
-            r = resolver_result["data"]
-            dtc_map = st.session_state.get("dtc_firm_map", {})
-
-            st.divider()
-            st.subheader("Pipeline Flow: Triage → Resolution")
-
-            thinking = resolver_result.get("thinking")
-            if thinking:
-                with st.expander("View AI Reasoning"):
-                    st.markdown(thinking)
-
-            left_col, right_col = st.columns(2)
-
-            with left_col:
-                st.markdown("#### Stage 1: Triage")
-                st.markdown(f"**Priority Score:** {t.get('priority_score', '—')}")
+    # -- Stage 2 --
+    if show_s2 and sc2 is not None:
+        with sc2:
+            if has_ai_resolver:
+                dtc_map = st.session_state.get("dtc_firm_map", {})
                 st.markdown(
-                    f"**Priority Tier:** "
-                    f"{TIER_DISPLAY.get(t.get('priority_tier', '').upper(), t.get('priority_tier', '—'))}"
-                )
-                esc_lvl = t.get("escalation_level", "NONE").upper()
-                st.markdown(
-                    f"**Escalation:** {ESCALATION_DISPLAY_FULL.get(esc_lvl, esc_lvl)}"
-                )
-                triage_flags = t.get("flags", [])
-                if triage_flags:
-                    st.markdown(
-                        "**Flags:** "
-                        + ", ".join(
-                            FLAG_DISPLAY.get(fl.upper() if isinstance(fl, str) else fl, fl)
-                            for fl in triage_flags
-                        )
-                    )
-
-            with right_col:
-                st.markdown("#### Stage 2: Resolution")
-                steps = r.get("resolution_steps", [])
-                st.markdown(f"**Steps:** {len(steps)}")
-                total_cov = r.get("total_coverable", 0) or 0
-                ftd = selected_fail["ftd_qty"]
-                cov_pct = round(total_cov / ftd * 100, 1) if ftd > 0 else 0
-                st.markdown(
-                    f"**Coverage:** {cov_pct}% ({total_cov:,} / {ftd:,} shares)"
-                )
-                st.markdown(
-                    f"**Gridlock:** {'Yes' if r.get('gridlock_detected') else 'No'}"
-                )
-                st.markdown(
-                    f"**Escalation:** "
-                    f"{'Required' if r.get('escalation_required') else 'Not required'}"
-                )
-
-            # Resolution Steps
-            st.divider()
-            st.subheader("Resolution Steps")
-
-            for step in steps:
-                step_num = step.get("step", "?")
-                action = step.get("action", "UNKNOWN").upper()
-                action_text = ACTION_DISPLAY.get(action, action)
-                qty = step.get("qty", 0) or 0
-                dtc_code = step.get("dtc", "")
-                firm = _dtc_to_firm(dtc_code, dtc_map) if dtc_code else ""
-                stype = step.get("settlement_type", "")
-                sdate = step.get("settlement_date", "")
-                coverage = step.get("coverage_after_step_pct", 0) or 0
-                remaining = step.get("remaining_short", 0) or 0
-                rationale = step.get("rationale", "")
-
-                firm_text = f" ({firm})" if firm and firm != dtc_code else ""
-                detail_parts = []
-                if stype:
-                    detail_parts.append(stype)
-                if sdate:
-                    detail_parts.append(sdate)
-                detail_text = (
-                    f" [{', '.join(detail_parts)}]" if detail_parts else ""
-                )
-
-                st.markdown(
-                    f"**Step {step_num}:** {action_text} — "
-                    f"{qty:,} shares from {dtc_code}{firm_text}{detail_text}"
-                )
-                if rationale:
-                    st.caption(rationale)
-                st.progress(
-                    min(coverage / 100, 1.0),
-                    text=f"Coverage: {coverage}% | Remaining: {remaining:,} shares",
-                )
-
-            # Coverage Summary
-            st.divider()
-            total_cov = r.get("total_coverable", 0) or 0
-            ftd = selected_fail["ftd_qty"]
-            cov_pct = round(total_cov / ftd * 100, 1) if ftd > 0 else 0
-            residual = r.get("residual_short", 0) or 0
-
-            cov_col, res_col = st.columns(2)
-            with cov_col:
-                if cov_pct >= 100:
-                    cov_color = "#6ee7b7"
-                elif cov_pct >= 75:
-                    cov_color = "#fcd34d"
-                else:
-                    cov_color = "#fca5a5"
-                st.markdown(
-                    f"<div style='text-align:center'>"
-                    f"<span style='font-size:2.5rem;font-weight:700;color:{cov_color}'>"
-                    f"{cov_pct}%</span>"
-                    f"<br><span style='color:#8b949e'>Total Coverage</span></div>",
+                    _render_stage2_html(fail, resolver_result["data"], dtc_map),
                     unsafe_allow_html=True,
                 )
-            with res_col:
+                with st.expander("DEBUG: RESOLVER PROMPT"):
+                    st.code(resolver_result.get("raw_prompt", ""), language="json")
+                with st.expander("DEBUG: RAW RESOLVER RESPONSE"):
+                    st.code(resolver_result.get("raw_content", ""), language="text")
+            elif has_ai_triage:
                 st.markdown(
-                    f"<div style='text-align:center'>"
-                    f"<span style='font-size:2.5rem;font-weight:700;color:#E6EDF3'>"
-                    f"{residual:,}</span>"
-                    f"<br><span style='color:#8b949e'>Residual Short</span></div>",
+                    '<div class="fo-stage-card">'
+                    '<header class="fo-stage-head">'
+                    '<div class="fo-stage-num">02</div>'
+                    '<div><div class="fo-stage-title">RESOLUTION MODEL</div>'
+                    '<div class="fo-stage-sub">Action plan · Fallback · Narrative</div></div>'
+                    '</header>'
+                    '<div class="fo-assessment" style="color:var(--fo-text-mute)">'
+                    'Stage 1 triage complete. Run Stage 2 to generate the resolution plan.</div></div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button("▶  RUN STAGE 2: RESOLUTION", key="run_resolver", use_container_width=True):
+                    if not _is_connected():
+                        st.warning("Test your Ollama connection first (TEST OLLAMA button).")
+                    else:
+                        t_data = triage_result["data"]
+                        with st.spinner("Stage 2: Generating resolution plan..."):
+                            res_result = call_resolver(
+                                st.session_state["ollama_url"], fail, t_data
+                            )
+                        if res_result["ok"]:
+                            st.session_state["resolver_result"] = res_result
+                            st.session_state["resolver_fail_id"] = fail_id
+                            st.rerun()
+                        else:
+                            st.error(res_result["error"])
+            else:
+                st.markdown(
+                    '<div class="fo-stage-card">'
+                    '<header class="fo-stage-head">'
+                    '<div class="fo-stage-num">02</div>'
+                    '<div><div class="fo-stage-title">RESOLUTION MODEL</div>'
+                    '<div class="fo-stage-sub">Action plan · Fallback · Narrative</div></div>'
+                    '</header>'
+                    '<div class="fo-assessment" style="color:var(--fo-text-mute)">'
+                    'Run Stage 1 first to enable resolution planning.</div></div>',
                     unsafe_allow_html=True,
                 )
 
-            st.progress(min(cov_pct / 100, 1.0))
-
-            # Gridlock Banner
-            gridlock = r.get("gridlock_detected", False)
-            gridlock_parties = r.get("gridlock_parties", [])
-            if gridlock:
-                party_names = [_dtc_to_firm(p, dtc_map) for p in gridlock_parties]
-                party_text = ", ".join(party_names) if party_names else "multiple firms"
-                st.error(
-                    f"Delivery gridlock detected involving {len(gridlock_parties)} "
-                    f"firms: {party_text}. Coordinated outreach recommended."
+    # ---- AI Reasoning Trace ----
+    if has_ai_resolver:
+        thinking = resolver_result.get("thinking")
+        if thinking:
+            with st.expander("VIEW AI REASONING TRACE"):
+                lines = thinking.strip().split("\n")
+                trace_html = "".join(
+                    f'<div class="fo-trace-line">'
+                    f'<span class="fo-trace-n">{str(i + 1).zfill(2)}</span>'
+                    f'<span class="fo-trace-t">{_esc(line)}</span></div>'
+                    for i, line in enumerate(lines) if line.strip()
                 )
-            else:
-                st.success("No gridlock detected")
-
-            # Escalation Banner
-            esc_req = r.get("escalation_required", False)
-            esc_reason = r.get("escalation_reason")
-            if esc_req:
-                reason_text = f" — {esc_reason}" if esc_reason else ""
-                st.warning(f"Escalation required{reason_text}")
-            else:
-                st.success("No escalation required")
-
-            # Fallback Strategy
-            fb = r.get("fallback_strategy")
-            fb_qty = r.get("fallback_qty", 0) or 0
-            sfb = r.get("secondary_fallback")
-            sfb_qty = r.get("secondary_fallback_qty", 0) or 0
-
-            if fb:
-                fb_text = FALLBACK_DISPLAY.get(fb, fb.lower().replace("_", " "))
-                parts = [f"If primary steps are insufficient: {fb_text}"]
-                if fb_qty:
-                    parts[0] += f" for {fb_qty:,} shares"
-                if sfb:
-                    sfb_text = FALLBACK_DISPLAY.get(
-                        sfb, sfb.lower().replace("_", " ")
-                    )
-                    sfb_part = f"If still unresolved: {sfb_text}"
-                    if sfb_qty:
-                        sfb_part += f" for {sfb_qty:,} shares"
-                    parts.append(sfb_part)
                 st.markdown(
-                    "**Fallback Strategy:** " + ". ".join(parts) + "."
+                    f'<div class="fo-trace-body">{trace_html}</div>',
+                    unsafe_allow_html=True,
                 )
 
-            # Narrative
-            narrative = r.get("narrative")
-            if narrative:
-                st.divider()
-                st.subheader("Resolution Summary")
-                st.markdown(narrative)
-
-else:
-    st.info("Use the sidebar to generate settlement fail scenarios.")
+# ---- Status bar ----
+st.markdown(
+    f'<div class="fo-statusbar">'
+    f'<span>ENV</span> <span class="v">prod-replica</span>'
+    f'<span style="margin:0 6px">·</span>'
+    f'<span>DATA</span> <span class="v">synthetic · {len(fails)} fails</span>'
+    f'<span style="margin:0 6px">·</span>'
+    f'<span>PIPELINE</span> <span class="v">triage → resolver</span>'
+    f'<span style="flex:1"></span>'
+    f'<span class="v">controls above queue</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
