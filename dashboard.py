@@ -100,30 +100,33 @@ ESCALATION_DISPLAY = {
 }
 
 # ---------------------------------------------------------------------------
-# Firm name pool — bulge bracket + market makers + regionals
+# Firm name pools — prime brokers vs execution brokers
 # ---------------------------------------------------------------------------
 
-FIRM_NAMES = [
-    # Bulge bracket / major banks
+PRIME_BROKERS = [
+    "Goldman Sachs Prime Services", "Morgan Stanley Prime Brokerage",
+    "JPMorgan Prime Brokerage", "BofA Prime Brokerage",
+    "Citigroup Prime Finance", "Barclays Prime Services",
+    "Deutsche Bank Prime Finance", "UBS Prime Services",
+    "Wells Fargo Prime Services", "Credit Suisse Prime Services",
+]
+
+EXECUTION_BROKERS = [
+    "Citadel Securities", "Virtu Financial", "Jane Street",
+    "Two Sigma", "Susquehanna", "Optiver", "IMC Financial Markets",
+    "Flow Traders", "Wolverine Trading", "DRW Securities",
+    "Knight Capital", "Instinet", "Virtu ITG",
+    "Cowen Execution Services", "Canaccord Genuity",
+    "Convergex", "Liquidnet", "Wedbush Securities",
     "Goldman Sachs", "Morgan Stanley", "JPMorgan",
     "Bank of America Securities", "Citigroup Global Markets",
-    "Barclays Capital", "Deutsche Bank Securities", "UBS Securities",
-    "Credit Suisse", "Wells Fargo Securities",
-    "BNP Paribas Securities", "Societe Generale",
-    "Nomura Securities", "HSBC Securities", "Jefferies",
-    "RBC Capital Markets", "TD Securities", "Mizuho Securities",
-    "MUFG Securities",
-    # Market makers / regional broker-dealers
-    "Citadel Securities", "Virtu Financial", "Jane Street",
-    "Two Sigma", "Susquehanna", "Optiver",
-    "IMC Financial Markets", "Flow Traders", "Wolverine Trading",
-    "DRW Securities", "Knight Capital", "Cantor Fitzgerald",
-    "Piper Sandler", "Raymond James", "Baird", "Oppenheimer",
-    "Cowen", "Needham", "Stifel", "Janney Montgomery Scott",
-    "Ladenburg Thalmann", "National Securities", "Maxim Group",
-    "B. Riley Securities", "Aegis Capital", "Benchmark Company",
-    "Chardan Capital", "EF Hutton", "H.C. Wainwright",
-    "Roth Capital Partners",
+    "Barclays Capital", "Deutsche Bank Securities",
+    "UBS Securities", "Wells Fargo Securities",
+    "Jefferies", "RBC Capital Markets", "TD Securities",
+    "Piper Sandler", "Raymond James", "Baird",
+    "Oppenheimer", "Cantor Fitzgerald", "Stifel",
+    "Needham", "Cowen", "B. Riley Securities",
+    "Janney Montgomery Scott", "Ladenburg Thalmann",
 ]
 
 # Top-broker DTC numbers from triage CLAUDE.md (40% of assignments)
@@ -163,13 +166,13 @@ CUSIP_POOL = [
 
 
 def _build_dtc_firm_map():
-    """Assign firm names to DTC numbers. Top brokers get bulge-bracket names."""
+    """Assign execution broker names to top DTC numbers."""
     mapping = {}
-    shuffled_firms = FIRM_NAMES.copy()
-    random.shuffle(shuffled_firms)
+    shuffled = EXECUTION_BROKERS.copy()
+    random.shuffle(shuffled)
     for i, dtc in enumerate(TOP_BROKER_DTCS):
-        mapping[dtc] = shuffled_firms[i % len(shuffled_firms)]
-    return mapping, shuffled_firms
+        mapping[dtc] = shuffled[i % len(shuffled)]
+    return mapping
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +389,18 @@ def _format_market_value(val):
         return f"${val:,.0f}"
 
 
-def generate_fail(dtc_firm_map, firm_pool):
+def _pick_firm(category, dtc, dtc_firm_map, stock_loan_context=False):
+    """Pick firm name based on category and context."""
+    if stock_loan_context:
+        return random.choice(PRIME_BROKERS)
+    if dtc in dtc_firm_map:
+        return dtc_firm_map[dtc]
+    firm_name = random.choice(EXECUTION_BROKERS)
+    dtc_firm_map[dtc] = firm_name
+    return firm_name
+
+
+def generate_fail(dtc_firm_map):
     """Generate a single fail scenario with all data needed for display and pipeline."""
     ftr_count = pick_ftr_count()
     ftrs = generate_ftrs(ftr_count)
@@ -403,14 +417,10 @@ def generate_fail(dtc_firm_map, firm_pool):
     cp_fail_rate = round(random.uniform(0.1, 9.5), 1)
     reg_sho = random.random() < 0.3
 
-    # Resolve firm name
-    if cp_dtc in dtc_firm_map:
-        firm_name = dtc_firm_map[cp_dtc]
-    else:
-        firm_name = random.choice(firm_pool)
-        dtc_firm_map[cp_dtc] = firm_name
-
     triage = generate_triage_multi_category(ftd_qty, ftrs)
+    category = triage["category"]
+
+    firm_name = _pick_firm(category, cp_dtc, dtc_firm_map)
     inventory = generate_inventory()
 
     # Escalation risk label
@@ -450,8 +460,8 @@ def generate_fail(dtc_firm_map, firm_pool):
 
 
 def generate_fails(count):
-    dtc_firm_map, firm_pool = _build_dtc_firm_map()
-    return [generate_fail(dtc_firm_map, firm_pool) for _ in range(count)]
+    dtc_firm_map = _build_dtc_firm_map()
+    return [generate_fail(dtc_firm_map) for _ in range(count)]
 
 
 # ---------------------------------------------------------------------------
