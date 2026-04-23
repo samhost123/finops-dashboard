@@ -4,6 +4,7 @@ import json
 import random
 import re
 import string
+import time
 from datetime import date, datetime
 from html import escape as _esc
 
@@ -1362,6 +1363,8 @@ if "filter_val" not in st.session_state:
     st.session_state["filter_val"] = "ALL"
 if "stage_mode" not in st.session_state:
     st.session_state["stage_mode"] = "Both"
+if "batch_results" not in st.session_state:
+    st.session_state["batch_results"] = {}
 
 fails = st.session_state.get("fails", [])
 
@@ -1383,6 +1386,9 @@ if not fails:
                 f["_id"] = f"FID-{10000 + i}"
             st.session_state["fails"] = _sort_fails(fails_list)
             st.session_state["dtc_firm_map"] = dtc_map
+            st.session_state["batch_results"] = {}
+            for _k in ("batch_running", "batch_idx", "batch_total", "batch_times", "batch_errors", "cancel_batch"):
+                st.session_state.pop(_k, None)
             st.rerun()
     st.stop()
 
@@ -1416,7 +1422,7 @@ st.markdown(
 )
 
 # ---- Controls bar ----
-ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([0.5, 2, 1.5, 0.5])
+ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4, ctrl_c5 = st.columns([0.5, 1.5, 1.2, 0.6, 0.5])
 
 with ctrl_c1:
     fail_count = st.number_input(
@@ -1433,6 +1439,9 @@ with ctrl_c1:
         st.session_state.pop("triage_fail_id", None)
         st.session_state.pop("resolver_result", None)
         st.session_state.pop("resolver_fail_id", None)
+        st.session_state["batch_results"] = {}
+        for _k in ("batch_running", "batch_idx", "batch_total", "batch_times", "batch_errors", "cancel_batch"):
+            st.session_state.pop(_k, None)
         st.rerun()
 
 with ctrl_c2:
@@ -1454,39 +1463,148 @@ with ctrl_c3:
     )
 
 with ctrl_c4:
+    if st.session_state.get("batch_running"):
+        def _cancel_batch():
+            st.session_state["cancel_batch"] = True
+        st.button("■ CANCEL", on_click=_cancel_batch, use_container_width=True)
+    else:
+        if st.button("▶ ANALYZE ALL", use_container_width=True, key="analyze_all"):
+            st.session_state["batch_running"] = True
+            st.session_state["batch_idx"] = 0
+            st.session_state["batch_total"] = len(fails)
+            st.session_state["batch_times"] = []
+            st.session_state["batch_errors"] = 0
+            st.session_state["cancel_batch"] = False
+            st.rerun()
+
+with ctrl_c5:
     conn_btn = st.button("TEST OLLAMA", use_container_width=True)
     if conn_btn:
         st.session_state["conn"] = check_ollama_connection(st.session_state["ollama_url"])
         st.rerun()
 
+# ---- Batch progress ----
+_batch_msg = st.session_state.pop("batch_complete_msg", None)
+if _batch_msg:
+    if "cancelled" in _batch_msg:
+        st.warning(_batch_msg)
+    else:
+        st.success(_batch_msg)
+
+if st.session_state.get("batch_running") and not st.session_state.get("cancel_batch"):
+    _bi = st.session_state.get("batch_idx", 0)
+    _bt = st.session_state.get("batch_total", 1)
+    _btimes = st.session_state.get("batch_times", [])
+    _pct = _bi / _bt if _bt > 0 else 0
+    _eta = ""
+    if _btimes:
+        _avg_s = sum(_btimes) / len(_btimes)
+        _rem_s = (_bt - _bi) * _avg_s
+        _eta = f" · ~{int(_rem_s // 60)}:{int(_rem_s % 60):02d} remaining"
+    _finfo = ""
+    if _bi < len(fails):
+        _cf = fails[_bi]
+        _finfo = f" — {_cf['cusip']} ({_ticker(_cf['cusip'])})"
+    st.progress(_pct, text=f"Analyzing fail {_bi + 1}/{_bt}{_finfo}{_eta}")
+
 # ---- KPI strip ----
 total = len(fails)
-critical = sum(1 for f in fails if f["priority_tier"] == "CRITICAL")
-escalate = sum(1 for f in fails if f["priority_tier"] in ("CRITICAL", "HIGH"))
-avg_cov = round(sum(f["inv_coverage_pct"] for f in fails) / total) if total else 0
-gridlock_n = sum(1 for f in fails if _has_gridlock(f))
-regsho_n = sum(1 for f in fails if f["reg_sho"])
 notional = sum(f["market_value"] for f in fails)
+
+_br_all = st.session_state.get("batch_results", {})
+_ai_triage = {fid: r for fid, r in _br_all.items() if r.get("triage", {}).get("ok")}
+_ai_resolver = {fid: r for fid, r in _br_all.items() if r.get("resolver", {}).get("ok")}
+_has_ai = len(_ai_triage) > 0
+
+if _has_ai:
+    critical = sum(
+        1 for r in _ai_triage.values()
+        if (r["triage"]["data"].get("priority_tier") or "").upper() == "CRITICAL"
+    )
+    critical_val = str(critical)
+    critical_cls = " crit" if critical > 0 else ""
+    critical_sub = f"{round(critical / len(_ai_triage) * 100)}% of {len(_ai_triage)} analyzed"
+else:
+    critical_val = "—"
+    critical_cls = ""
+    critical_sub = "run AI pipeline"
+
+if _ai_resolver:
+    escalate = sum(
+        1 for r in _ai_resolver.values()
+        if r["resolver"]["data"].get("escalation_required")
+    )
+    escalate_val = str(escalate)
+    escalate_cls = " warn" if escalate > 5 else ""
+    escalate_sub = f"of {len(_ai_resolver)} resolved"
+else:
+    escalate_val = "—"
+    escalate_cls = ""
+    escalate_sub = "run AI pipeline"
+
+if _ai_resolver:
+    _fmap = {f["_id"]: f for f in fails}
+    _covs = []
+    for fid, r in _ai_resolver.items():
+        _tc = r["resolver"]["data"].get("total_coverable", 0) or 0
+        _fl = _fmap.get(fid)
+        if _fl and _fl["ftd_qty"] > 0:
+            _covs.append(_tc / _fl["ftd_qty"] * 100)
+    avg_cov = round(sum(_covs) / len(_covs)) if _covs else 0
+    avg_cov_val = f"{avg_cov}%"
+    avg_cov_sub = "healthy inventory" if avg_cov >= 60 else "thin inventory"
+else:
+    avg_cov_val = "—"
+    avg_cov_sub = "run AI pipeline"
+
+if _ai_resolver:
+    gridlock_n = sum(
+        1 for r in _ai_resolver.values()
+        if r["resolver"]["data"].get("gridlock_detected")
+    )
+    gridlock_val = str(gridlock_n)
+    gridlock_cls = " warn" if gridlock_n > 0 else ""
+    gridlock_sub = "chain-match needed"
+else:
+    gridlock_val = "—"
+    gridlock_cls = ""
+    gridlock_sub = "run AI pipeline"
+
+if _has_ai:
+    regsho_n = sum(
+        1 for r in _ai_triage.values()
+        if any(
+            fl.upper() in ("REG_SHO", "REG_SHO_CLOSE_OUT", "REG_SHO_CLOSEOUT")
+            for fl in r["triage"]["data"].get("flags", [])
+        )
+    )
+    regsho_val = str(regsho_n)
+    regsho_cls = " crit" if regsho_n > 0 else ""
+    regsho_sub = "close-out eligible"
+else:
+    regsho_val = "—"
+    regsho_cls = ""
+    regsho_sub = "run AI pipeline"
 
 st.markdown(
     f'<div class="fo-kpis">'
     f'<div class="fo-kpi"><div class="fo-kpi-label">OPEN FAILS</div>'
     f'<div class="fo-kpi-val">{total}</div><div class="fo-kpi-sub">monitored</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">CRITICAL</div>'
-    f'<div class="fo-kpi-val{" crit" if critical > 0 else ""}">{critical}</div>'
-    f'<div class="fo-kpi-sub">{round(critical / total * 100) if total else 0}% of book</div></div>'
+    f'<div class="fo-kpi-val{critical_cls}">{critical_val}</div>'
+    f'<div class="fo-kpi-sub">{critical_sub}</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">NEEDS ESCALATION</div>'
-    f'<div class="fo-kpi-val{" warn" if escalate > 5 else ""}">{escalate}</div>'
-    f'<div class="fo-kpi-sub">VP + desk supv.</div></div>'
+    f'<div class="fo-kpi-val{escalate_cls}">{escalate_val}</div>'
+    f'<div class="fo-kpi-sub">{escalate_sub}</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">AVG COVERAGE</div>'
-    f'<div class="fo-kpi-val">{avg_cov}%</div>'
-    f'<div class="fo-kpi-sub">{"healthy inventory" if avg_cov >= 60 else "thin inventory"}</div></div>'
+    f'<div class="fo-kpi-val">{avg_cov_val}</div>'
+    f'<div class="fo-kpi-sub">{avg_cov_sub}</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">GRIDLOCK</div>'
-    f'<div class="fo-kpi-val{" warn" if gridlock_n > 0 else ""}">{gridlock_n}</div>'
-    f'<div class="fo-kpi-sub">chain-match needed</div></div>'
+    f'<div class="fo-kpi-val{gridlock_cls}">{gridlock_val}</div>'
+    f'<div class="fo-kpi-sub">{gridlock_sub}</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">REG SHO</div>'
-    f'<div class="fo-kpi-val{" crit" if regsho_n > 0 else ""}">{regsho_n}</div>'
-    f'<div class="fo-kpi-sub">close-out eligible</div></div>'
+    f'<div class="fo-kpi-val{regsho_cls}">{regsho_val}</div>'
+    f'<div class="fo-kpi-sub">{regsho_sub}</div></div>'
     f'<div class="fo-kpi"><div class="fo-kpi-label">NOTIONAL EXPOSURE</div>'
     f'<div class="fo-kpi-val">{_fmt_mv(notional)}</div>'
     f'<div class="fo-kpi-sub">across open book</div></div>'
@@ -1511,12 +1629,25 @@ with left_col:
         unsafe_allow_html=True,
     )
     queue_rows = []
+    _br_q = st.session_state.get("batch_results", {})
     for i, f in enumerate(filtered):
         rsd = _reg_sho_days(f)
+        fid = f.get("_id", f"FID-{10000 + i}")
+        _st = _br_q.get(fid, {}).get("status", "")
+        if _st == "analyzed":
+            ai_label = "✓ Analyzed"
+        elif _st == "triage_error":
+            ai_label = "✗ Triage Err"
+        elif _st == "resolver_error":
+            ai_label = "⚠ Resolve Err"
+        elif _st == "triage_only":
+            ai_label = "½ Triage"
+        else:
+            ai_label = "○ Pending"
         queue_rows.append({
             "TIER": f["priority_tier"],
             "PRI": int(f["priority_score"]),
-            "ID": f.get("_id", f"FID-{10000 + i}"),
+            "ID": fid,
             "TICKER": _ticker(f["cusip"]),
             "CUSIP": f["cusip"],
             "TYPE": CATEGORY_DISPLAY.get(f["category"], f["category"]),
@@ -1528,6 +1659,7 @@ with left_col:
             "REG SHO": f"T-{rsd}d" if rsd else "—",
             "COV%": f["inv_coverage_pct"],
             "FLAGS": ", ".join(f.get("flags", [])[:3]),
+            "STATUS": ai_label,
         })
     queue_df = pd.DataFrame(queue_rows)
     event = st.dataframe(
@@ -1543,6 +1675,7 @@ with left_col:
             "NOTIONAL": st.column_config.NumberColumn(format="$%,.0f"),
             "AGE": st.column_config.NumberColumn(width="small"),
             "COV%": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
+            "STATUS": st.column_config.TextColumn(width="small"),
         },
     )
     sel_rows = event.selection.rows
@@ -1625,21 +1758,27 @@ with right_col:
     show_s1 = sm in ("Both", "Stage 1")
     show_s2 = sm in ("Both", "Stage 2")
 
+    _br_detail = st.session_state.get("batch_results", {}).get(fail_id, {})
+
     triage_result = st.session_state.get("triage_result")
     triage_fail_id = st.session_state.get("triage_fail_id")
-    has_ai_triage = (
+    _indiv_triage = (
         triage_result is not None
         and triage_result.get("ok")
         and triage_fail_id == fail_id
     )
+    has_ai_triage = _indiv_triage or _br_detail.get("triage", {}).get("ok", False)
+    eff_triage = triage_result if _indiv_triage else _br_detail.get("triage") if has_ai_triage else None
 
     resolver_result = st.session_state.get("resolver_result")
     resolver_fail_id = st.session_state.get("resolver_fail_id")
-    has_ai_resolver = (
+    _indiv_resolver = (
         resolver_result is not None
         and resolver_result.get("ok")
         and resolver_fail_id == fail_id
     )
+    has_ai_resolver = _indiv_resolver or _br_detail.get("resolver", {}).get("ok", False)
+    eff_resolver = resolver_result if _indiv_resolver else _br_detail.get("resolver") if has_ai_resolver else None
 
     if show_s1 and show_s2:
         sc1, sc2 = st.columns(2)
@@ -1653,7 +1792,7 @@ with right_col:
     # -- Stage 1 --
     if show_s1 and sc1 is not None:
         with sc1:
-            tdata = triage_result["data"] if has_ai_triage else fail.get("triage", {})
+            tdata = eff_triage["data"] if has_ai_triage else fail.get("triage", {})
             st.markdown(
                 _render_stage1_html(fail, tdata, is_ai=has_ai_triage),
                 unsafe_allow_html=True,
@@ -1668,28 +1807,34 @@ with right_col:
                         if result["ok"]:
                             st.session_state["triage_result"] = result
                             st.session_state["triage_fail_id"] = fail_id
+                            _br_u = st.session_state["batch_results"]
+                            if fail_id not in _br_u:
+                                _br_u[fail_id] = {}
+                            _br_u[fail_id]["triage"] = result
+                            if _br_u[fail_id].get("status") != "analyzed":
+                                _br_u[fail_id]["status"] = "triage_only"
                             st.rerun()
                         else:
                             st.error(result["error"])
-            if has_ai_triage:
+            if has_ai_triage and eff_triage:
                 with st.expander("DEBUG: TRIAGE PROMPT"):
-                    st.code(triage_result.get("raw_prompt", ""), language="text")
+                    st.code(eff_triage.get("raw_prompt", ""), language="text")
                 with st.expander("DEBUG: RAW TRIAGE RESPONSE"):
-                    st.code(triage_result.get("raw_content", ""), language="json")
+                    st.code(eff_triage.get("raw_content", ""), language="json")
 
     # -- Stage 2 --
     if show_s2 and sc2 is not None:
         with sc2:
-            if has_ai_resolver:
+            if has_ai_resolver and eff_resolver:
                 dtc_map = st.session_state.get("dtc_firm_map", {})
                 st.markdown(
-                    _render_stage2_html(fail, resolver_result["data"], dtc_map),
+                    _render_stage2_html(fail, eff_resolver["data"], dtc_map),
                     unsafe_allow_html=True,
                 )
                 with st.expander("DEBUG: RESOLVER PROMPT"):
-                    st.code(resolver_result.get("raw_prompt", ""), language="json")
+                    st.code(eff_resolver.get("raw_prompt", ""), language="json")
                 with st.expander("DEBUG: RAW RESOLVER RESPONSE"):
-                    st.code(resolver_result.get("raw_content", ""), language="text")
+                    st.code(eff_resolver.get("raw_content", ""), language="text")
             elif has_ai_triage:
                 st.markdown(
                     '<div class="fo-stage-card">'
@@ -1706,7 +1851,7 @@ with right_col:
                     if not _is_connected():
                         st.warning("Test your Ollama connection first (TEST OLLAMA button).")
                     else:
-                        t_data = triage_result["data"]
+                        t_data = eff_triage["data"]
                         with st.spinner("Stage 2: Generating resolution plan..."):
                             res_result = call_resolver(
                                 st.session_state["ollama_url"], fail, t_data
@@ -1714,6 +1859,11 @@ with right_col:
                         if res_result["ok"]:
                             st.session_state["resolver_result"] = res_result
                             st.session_state["resolver_fail_id"] = fail_id
+                            _br_u2 = st.session_state["batch_results"]
+                            if fail_id not in _br_u2:
+                                _br_u2[fail_id] = {}
+                            _br_u2[fail_id]["resolver"] = res_result
+                            _br_u2[fail_id]["status"] = "analyzed"
                             st.rerun()
                         else:
                             st.error(res_result["error"])
@@ -1731,8 +1881,8 @@ with right_col:
                 )
 
     # ---- AI Reasoning Trace ----
-    if has_ai_resolver:
-        thinking = resolver_result.get("thinking")
+    if has_ai_resolver and eff_resolver:
+        thinking = eff_resolver.get("thinking")
         if thinking:
             with st.expander("VIEW AI REASONING TRACE"):
                 lines = thinking.strip().split("\n")
@@ -1748,15 +1898,69 @@ with right_col:
                 )
 
 # ---- Status bar ----
+_analyzed_count = sum(1 for r in st.session_state.get("batch_results", {}).values() if r.get("status") == "analyzed")
 st.markdown(
     f'<div class="fo-statusbar">'
     f'<span>ENV</span> <span class="v">prod-replica</span>'
     f'<span style="margin:0 6px">·</span>'
     f'<span>DATA</span> <span class="v">synthetic · {len(fails)} fails</span>'
     f'<span style="margin:0 6px">·</span>'
-    f'<span>PIPELINE</span> <span class="v">triage → resolver</span>'
+    f'<span>PIPELINE</span> <span class="v">triage → resolver · {_analyzed_count}/{len(fails)} analyzed</span>'
     f'<span style="flex:1"></span>'
     f'<span class="v">controls above queue</span>'
     f'</div>',
     unsafe_allow_html=True,
 )
+
+# ---- Batch auto-processing ----
+if st.session_state.get("batch_running") and st.session_state.get("cancel_batch"):
+    _bi_c = st.session_state.get("batch_idx", 0)
+    _bt_c = st.session_state.get("batch_total", 0)
+    _be_c = st.session_state.get("batch_errors", 0)
+    _msg_c = f"Batch cancelled — {_bi_c}/{_bt_c} completed"
+    if _be_c:
+        _msg_c += f", {_be_c} errors"
+    st.session_state["batch_complete_msg"] = _msg_c
+    st.session_state["batch_running"] = False
+    st.session_state["cancel_batch"] = False
+    st.rerun()
+elif st.session_state.get("batch_running"):
+    _bi_p = st.session_state.get("batch_idx", 0)
+    _bt_p = st.session_state.get("batch_total", 0)
+
+    if _bi_p < _bt_p and _bi_p < len(fails):
+        _fail_p = fails[_bi_p]
+        _fid_p = _fail_p["_id"]
+        _t0 = time.time()
+        _entry = {}
+
+        _tres = call_triage(st.session_state["ollama_url"], _fail_p)
+        if _tres["ok"]:
+            _entry["triage"] = _tres
+            _rres = call_resolver(
+                st.session_state["ollama_url"], _fail_p, _tres["data"]
+            )
+            if _rres["ok"]:
+                _entry["resolver"] = _rres
+                _entry["status"] = "analyzed"
+            else:
+                _entry["status"] = "resolver_error"
+                _entry["error"] = _rres["error"]
+                st.session_state["batch_errors"] = st.session_state.get("batch_errors", 0) + 1
+        else:
+            _entry["status"] = "triage_error"
+            _entry["error"] = _tres["error"]
+            st.session_state["batch_errors"] = st.session_state.get("batch_errors", 0) + 1
+
+        st.session_state["batch_times"].append(time.time() - _t0)
+        st.session_state["batch_results"][_fid_p] = _entry
+        st.session_state["batch_idx"] = _bi_p + 1
+        st.rerun()
+    else:
+        _be_d = st.session_state.get("batch_errors", 0)
+        _msg_d = f"Batch complete — {_bt_p}/{_bt_p} analyzed"
+        if _be_d:
+            _msg_d += f", {_be_d} errors"
+        st.session_state["batch_complete_msg"] = _msg_d
+        st.session_state["batch_running"] = False
+        st.rerun()
