@@ -1213,13 +1213,13 @@ def _render_queue_html(fails, selected_idx):
 
 def _render_stage1_html(fail, triage_data, is_ai=False):
     t = triage_data or fail.get("triage", {})
-    reason = t.get("reason", "—")
-    esc_level = t.get("escalation_level", "NONE").upper()
+    reason = t.get("reason") or "—"
+    esc_level = (t.get("escalation_level") or "NONE").upper()
     esc_text = ESCALATION_DISPLAY_FULL.get(esc_level, esc_level)
-    action = t.get("action", "—")
-    deadline = t.get("deadline", "—")
-    category = CATEGORY_DISPLAY.get(t.get("category", ""), t.get("category", "—"))
-    lifecycle = t.get("lifecycle_state", "—")
+    action = t.get("action") or "—"
+    deadline = t.get("deadline") or "—"
+    category = CATEGORY_DISPLAY.get(t.get("category", ""), t.get("category")) or "—"
+    lifecycle = t.get("lifecycle_state") or "—"
     source_label = "AI Model" if is_ai else "Generated"
 
     flags = t.get("flags", [])
@@ -1493,19 +1493,49 @@ if not filtered:
 left_col, right_col = st.columns([1.1, 1], gap="small")
 
 with left_col:
-    options = [
-        f"{f.get('_id', f'FID-{i}')}  ·  {_ticker(f['cusip'])}  ·  "
-        f"{CATEGORY_DISPLAY.get(f['category'], f['category'])}  ·  P:{f['priority_score']:.0f}"
-        for i, f in enumerate(filtered)
-    ]
-    selected_idx = st.selectbox(
-        "Select fail",
-        range(len(filtered)),
-        format_func=lambda i: options[i],
-        key="selected_fail_idx",
-        label_visibility="collapsed",
+    st.markdown(
+        f'<div class="fo-queue-head">'
+        f'<span class="fo-panel-title">FAIL QUEUE</span>'
+        f'<span class="fo-panel-sub">{len(filtered)} fails</span></div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(_render_queue_html(filtered, selected_idx), unsafe_allow_html=True)
+    queue_rows = []
+    for i, f in enumerate(filtered):
+        rsd = _reg_sho_days(f)
+        queue_rows.append({
+            "TIER": f["priority_tier"],
+            "PRI": int(f["priority_score"]),
+            "ID": f.get("_id", f"FID-{10000 + i}"),
+            "TICKER": _ticker(f["cusip"]),
+            "CUSIP": f["cusip"],
+            "TYPE": CATEGORY_DISPLAY.get(f["category"], f["category"]),
+            "COUNTERPARTY": f["firm_name"],
+            "ACCT": f["account"],
+            "SHARES": f["ftd_qty"],
+            "NOTIONAL": f["market_value"],
+            "AGE": f["age_days"],
+            "REG SHO": f"T-{rsd}d" if rsd else "—",
+            "COV%": f["inv_coverage_pct"],
+            "FLAGS": ", ".join(f.get("flags", [])[:3]),
+        })
+    queue_df = pd.DataFrame(queue_rows)
+    event = st.dataframe(
+        queue_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="queue_selection",
+        column_config={
+            "PRI": st.column_config.NumberColumn(width="small"),
+            "SHARES": st.column_config.NumberColumn(format="%d"),
+            "NOTIONAL": st.column_config.NumberColumn(format="$%,.0f"),
+            "AGE": st.column_config.NumberColumn(width="small"),
+            "COV%": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
+        },
+    )
+    sel_rows = event.selection.rows
+    selected_idx = sel_rows[0] if sel_rows else 0
 
 with right_col:
     fail = filtered[selected_idx]
