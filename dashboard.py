@@ -724,11 +724,11 @@ def _is_connected():
 # ---------------------------------------------------------------------------
 
 RESOLVER_SYSTEM_PROMPT = (
-    "You are a post-trade settlement resolution assistant. Given a triage output, "
-    "inventory snapshot, and pending FTRs for a CUSIP, recommend an ordered resolution "
-    "sequence following the KB resolution logic. Chase FTRs first (oldest then largest), "
-    "apply free box, recall before borrow. Apply partials immediately. Detect and flag "
-    "gridlock. Output JSON only — no explanation, no markdown, no preamble."
+    "You are a post-trade settlement resolution engine for a broker-dealer clearing "
+    "operation. You receive structured JSON describing a fail record, inventory snapshot, "
+    "and pending FTRs. You output a JSON resolution plan only. No emojis. No markdown. "
+    "No preamble. No explanation outside the JSON. Think through the resolution waterfall "
+    "before responding."
 )
 
 ACTION_DISPLAY = {
@@ -820,8 +820,7 @@ def call_resolver(endpoint_url, fail, triage_data):
             {"role": "user", "content": prompt},
         ],
         "stream": False,
-        "options": {"num_ctx": 2048},
-        "think": False,
+        "options": {"num_ctx": 5120},
     }
 
     content = None
