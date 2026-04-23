@@ -685,6 +685,7 @@ def call_triage(endpoint_url, fail):
             {"role": "user", "content": prompt},
         ],
         "stream": False,
+        "options": {"num_ctx": 2048},
     }
     try:
         resp = requests.post(url, json=payload, timeout=300)
@@ -801,6 +802,7 @@ def call_resolver(endpoint_url, fail, triage_data):
             {"role": "user", "content": prompt},
         ],
         "stream": False,
+        "options": {"num_ctx": 2048},
     }
 
     try:
