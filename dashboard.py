@@ -6,7 +6,7 @@ import random
 import re
 import string
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import escape as _esc
 
 import pandas as pd
@@ -686,9 +686,9 @@ def call_triage(endpoint_url, fail):
 
 
 def _is_connected():
-    """Check if connection state is confirmed green."""
-    conn = st.session_state.get("conn")
-    return conn is not None and conn["reachable"] and not conn["models_missing"]
+    """Live-ping Ollama — works even when session state resets between clicks."""
+    conn = check_ollama_connection(st.session_state.get("ollama_url", "localhost:11434"))
+    return conn["reachable"] and not conn["models_missing"]
 
 
 # ---------------------------------------------------------------------------
@@ -1682,11 +1682,11 @@ if not fails:
     st.stop()
 
 # ---- Top bar ----
-conn = st.session_state.get("conn")
 ollama_url = st.session_state.get("ollama_url", "localhost:11434")
-ollama_ok = conn is not None and conn["reachable"] and not conn["models_missing"]
-ollama_reachable = conn is not None and conn["reachable"]
-time_str = datetime.utcnow().strftime("%H:%M:%S")
+conn = check_ollama_connection(ollama_url)
+ollama_ok = conn["reachable"] and not conn["models_missing"]
+ollama_reachable = conn["reachable"]
+time_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 st.markdown(
     f'<div class="fo-topbar">'
@@ -1996,7 +1996,6 @@ with left_col:
     queue_df = pd.DataFrame(queue_rows)
     event = st.dataframe(
         queue_df,
-        use_container_width=True,
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
@@ -2132,7 +2131,7 @@ with right_col:
             if not has_ai_triage:
                 if st.button("▶  RUN STAGE 1: TRIAGE", key="run_triage", use_container_width=True):
                     if not _is_connected():
-                        st.warning("Test your Ollama connection first (TEST OLLAMA button).")
+                        st.warning("Cannot reach Ollama or required models are missing. Check the endpoint URL in the sidebar.")
                     else:
                         with st.spinner("Stage 1: Analyzing fail record..."):
                             result = call_triage(st.session_state["ollama_url"], fail)
@@ -2172,7 +2171,7 @@ with right_col:
                 )
                 if st.button("▶  RUN STAGE 2: RESOLUTION", key="run_resolver", use_container_width=True):
                     if not _is_connected():
-                        st.warning("Test your Ollama connection first (TEST OLLAMA button).")
+                        st.warning("Cannot reach Ollama or required models are missing. Check the endpoint URL in the sidebar.")
                     else:
                         t_data = eff_triage["data"]
                         with st.spinner("Stage 2: Generating resolution plan..."):
