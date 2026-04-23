@@ -688,21 +688,25 @@ def call_triage(endpoint_url, fail):
         "options": {"num_ctx": 2048},
         "think": False,
     }
+    content = None
     try:
         resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        _, json_text = parse_think_response(content)
+        json_text = _extract_json(content)
         parsed = json.loads(json_text)
         if not isinstance(parsed, dict):
-            return {"ok": False, "error": "Stage 1 returned an unexpected response format. Try again."}
+            return {"ok": False, "error": "Stage 1 returned an unexpected response format. Try again.",
+                    "raw_content": content}
         return {"ok": True, "data": parsed, "raw_prompt": prompt, "raw_content": content}
     except requests.exceptions.Timeout:
         return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
     except requests.exceptions.ConnectionError:
         return {"ok": False, "error": "Could not reach the AI models. Check that Ollama is running."}
     except (json.JSONDecodeError, KeyError, ValueError):
-        return {"ok": False, "error": "Stage 1 returned an unexpected response. Try again."}
+        preview = (content[:500] + "...") if content and len(content) > 500 else content
+        return {"ok": False,
+                "error": f"Stage 1 returned unparseable response. Raw output:\n\n{preview}"}
     except Exception:
         return {"ok": False, "error": "Stage 1 encountered an unexpected error. Try again."}
 
@@ -761,6 +765,18 @@ def parse_think_response(text):
     return None, text.strip()
 
 
+def _extract_json(text):
+    """Strip markdown fences, thinking blocks, and preamble to find JSON."""
+    _, text = parse_think_response(text)
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, flags=re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    start = text.find("{")
+    if start != -1:
+        text = text[start:]
+    return text
+
+
 def _dtc_to_firm(dtc_code, dtc_firm_map):
     raw = dtc_code.replace("DTC-", "")
     return dtc_firm_map.get(raw, dtc_code)
@@ -808,14 +824,17 @@ def call_resolver(endpoint_url, fail, triage_data):
         "think": False,
     }
 
+    content = None
     try:
         resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        thinking, json_text = parse_think_response(content)
+        thinking, _ = parse_think_response(content)
+        json_text = _extract_json(content)
         parsed = json.loads(json_text)
         if not isinstance(parsed, dict):
-            return {"ok": False, "error": "Stage 2 returned an unexpected response format. Try again."}
+            return {"ok": False, "error": "Stage 2 returned an unexpected response format. Try again.",
+                    "raw_content": content}
         return {
             "ok": True,
             "data": parsed,
@@ -834,9 +853,10 @@ def call_resolver(endpoint_url, fail, triage_data):
             "error": "Could not reach the AI models. Check that Ollama is running.",
         }
     except (json.JSONDecodeError, KeyError, ValueError):
+        preview = (content[:500] + "...") if content and len(content) > 500 else content
         return {
             "ok": False,
-            "error": "Stage 2 returned an unexpected response. Try again.",
+            "error": f"Stage 2 returned unparseable response. Raw output:\n\n{preview}",
         }
     except Exception:
         return {
