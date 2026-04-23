@@ -25,47 +25,65 @@ import streamlit as st
 # Ollama connectivity (Phase 1)
 # ---------------------------------------------------------------------------
 
-REQUIRED_MODELS = ["finops-triage", "finops-resolver"]
+MODEL_PATTERNS = {
+    "triage": ["finops-triage", "sammiset/finops-fail-triage"],
+    "resolver": ["finops-resolver", "sammiset/finops-resolver"],
+}
+
+_MODEL_ROLES = list(MODEL_PATTERNS.keys())
+
+_CONN_UNREACHABLE = {
+    "reachable": False,
+    "models_found": [],
+    "models_missing": list(_MODEL_ROLES),
+    "resolved_models": {},
+    "raw_model_names": [],
+}
 
 
 def check_ollama_connection(endpoint_url):
     """Check Ollama endpoint health and model availability.
 
-    Returns dict: reachable, models_found, models_missing, error.
+    Returns dict: reachable, models_found, models_missing, resolved_models,
+    raw_model_names, error.  resolved_models maps role -> full Ollama name.
     """
     url = endpoint_url.rstrip("/") + "/api/tags"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-        available = {m["name"].split(":")[0] for m in data.get("models", [])}
-        found = [m for m in REQUIRED_MODELS if m in available]
-        missing = [m for m in REQUIRED_MODELS if m not in available]
+        raw_names = [m["name"] for m in data.get("models", [])]
+
+        resolved = {}
+        for role, patterns in MODEL_PATTERNS.items():
+            for raw in raw_names:
+                base = raw.split(":")[0]
+                if any(p in base for p in patterns):
+                    resolved[role] = raw
+                    break
+
+        missing = [r for r in _MODEL_ROLES if r not in resolved]
         return {
             "reachable": True,
-            "models_found": found,
+            "models_found": list(resolved.keys()),
             "models_missing": missing,
+            "resolved_models": resolved,
+            "raw_model_names": raw_names,
             "error": None,
         }
     except requests.exceptions.Timeout:
         return {
-            "reachable": False,
-            "models_found": [],
-            "models_missing": REQUIRED_MODELS,
+            **_CONN_UNREACHABLE,
             "error": f"Could not reach the AI models. Check that Ollama is running at {endpoint_url}.",
         }
     except requests.exceptions.ConnectionError:
         return {
-            "reachable": False,
-            "models_found": [],
-            "models_missing": REQUIRED_MODELS,
+            **_CONN_UNREACHABLE,
             "error": f"Could not reach the AI models. Check that Ollama is running at {endpoint_url}.",
         }
     except Exception:
         return {
-            "reachable": False,
-            "models_found": [],
-            "models_missing": REQUIRED_MODELS,
+            **_CONN_UNREACHABLE,
             "error": "Connection check failed. Verify the endpoint URL in the sidebar.",
         }
 
@@ -659,8 +677,9 @@ def call_triage(endpoint_url, fail):
     """Call finops-triage via Ollama /api/chat and return parsed JSON."""
     url = endpoint_url.rstrip("/") + "/api/chat"
     prompt = format_triage_prompt(fail)
+    resolved = st.session_state.get("resolved_models", {})
     payload = {
-        "model": "finops-triage",
+        "model": resolved.get("triage", "finops-triage"),
         "messages": [
             {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -688,6 +707,8 @@ def call_triage(endpoint_url, fail):
 def _is_connected():
     """Live-ping Ollama — works even when session state resets between clicks."""
     conn = check_ollama_connection(st.session_state.get("ollama_url", "localhost:11434"))
+    if conn["reachable"] and conn.get("resolved_models"):
+        st.session_state["resolved_models"] = conn["resolved_models"]
     return conn["reachable"] and not conn["models_missing"]
 
 
@@ -772,8 +793,9 @@ def call_resolver(endpoint_url, fail, triage_data):
     resolver_input = compose_resolver_input(fail, triage_data)
     prompt = "Resolve this fail:\n" + json.dumps(resolver_input)
 
+    resolved = st.session_state.get("resolved_models", {})
     payload = {
-        "model": "finops-resolver",
+        "model": resolved.get("resolver", "finops-resolver"),
         "messages": [
             {"role": "system", "content": RESOLVER_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -1686,6 +1708,8 @@ ollama_url = st.session_state.get("ollama_url", "localhost:11434")
 conn = check_ollama_connection(ollama_url)
 ollama_ok = conn["reachable"] and not conn["models_missing"]
 ollama_reachable = conn["reachable"]
+if conn["reachable"] and conn.get("resolved_models"):
+    st.session_state["resolved_models"] = conn["resolved_models"]
 time_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 st.markdown(
@@ -1709,6 +1733,13 @@ st.markdown(
     f'</div></div></div>',
     unsafe_allow_html=True,
 )
+
+with st.expander("Connection Debug"):
+    st.write("**Raw model names from /api/tags:**", conn.get("raw_model_names", []))
+    st.write("**Resolved models (role -> Ollama name):**", conn.get("resolved_models", {}))
+    st.write("**Missing roles:**", conn.get("models_missing", []))
+    if conn.get("error"):
+        st.write("**Error:**", conn["error"])
 
 # ---- Controls bar ----
 ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4, ctrl_c5 = st.columns([0.5, 1.5, 1.2, 0.6, 0.5])
