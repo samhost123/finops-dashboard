@@ -1,9 +1,9 @@
 # FinOps Dashboard — Project Status
 
-**Last updated:** 2026-04-21
+**Last updated:** 2026-04-22
 **Repo:** `samhost123/finops-dashboard` (private, GitHub)
 **Branch:** `main` — all work committed and pushed
-**Main file:** `dashboard.py` (1,205 lines, single-file Streamlit app)
+**Main file:** `dashboard.py` (~1,750 lines, single-file Streamlit app)
 
 ---
 
@@ -15,6 +15,7 @@
 | 1 — Ollama Connectivity | Done | `d5ba8ab` |
 | 2 — Stage 1 Triage Pipeline | Done | `dab6534` |
 | 3 — Stage 2 Resolver Pipeline | Done | `5b15f9b`, `e6acbef` |
+| UI — Trader-Desk Redesign | Done | `b77f209`, `00e3f79`, `d71b5f1` |
 | 4 — Batch Processing & KPI Metrics | **Not started** | — |
 | 5 — Polish & Deployment | **Not started** | — |
 
@@ -30,11 +31,27 @@
 - Related fails generated with gridlock-aware logic
 - Real-format CUSIPs, synthetic accounts (ACC-XXXXXX), market values across tiers
 
-### Table Display
-- Age-based row coloring (red 10+d, amber 7-9d, green 4-6d, deep green 1-3d)
-- Input-only columns: Security, Counterparty, Account, Fail Type, Shares, Market Value, Age, Reg SHO, Inventory
-- No model-output fields shown before analysis (no fake tiers/scores)
-- Summary metrics show "—" until batch analysis runs
+### UI — Trader-Desk Redesign (2026-04-22)
+- Ported HTML/React design (`fails monitorimg/`) to Streamlit presentation layer
+- Dark trader-desk theme: `#0a0b0d` background, `#4ED6C9` cyan accent, JetBrains Mono font
+- Custom CSS overrides for Streamlit internals (hidden header/footer, reduced padding)
+- **Top bar** with branding, model status indicators, Ollama connection, UTC clock
+- **KPI strip** — 7 metrics: Open Fails, Critical, Needs Escalation, Avg Coverage, Gridlock, Reg SHO, Notional Exposure
+- **Inline controls** — generate (count + button), filter radio (ALL/CRITICAL/HIGH/MEDIUM/LOW/REG SHO/GRIDLOCK), stage toggle (Both/Stage 1/Stage 2), Test Ollama — no sidebar needed
+- **Selectable queue table** — `st.dataframe` with `on_select="rerun"` and `selection_mode="single-row"` for click-to-select rows; coverage column as progress bar
+- **Two-pane layout** — `st.columns([1.1, 1])`: queue table (left) + detail panel (right)
+- **Detail panel** — fail header with tier/REG SHO/gridlock chips, 6-cell metric strip (priority, tier, age, coverage, reg sho, flags)
+- **Stage cards** — Stage 1 (Triage) and Stage 2 (Resolution) side by side via nested `st.columns(2)`
+- **AI reasoning trace** — collapsible expander showing resolver thinking steps
+- **Status bar** — environment, data source, pipeline info
+- CUSIP-to-ticker/name mapping (`CUSIP_INFO`) for human-readable security display
+- All CSS classes prefixed `fo-` to avoid Streamlit conflicts
+
+### Data Generation Updates (2026-04-22)
+- CNS fails show "vs CNS" — no counterparty firm assigned
+- CNS category splits into `CNS_FTD` (Fail to Deliver) and `CNS_FTR` (Fail to Receive)
+- FTR fails: side forced to "Buy", quantities swapped
+- Null-safe triage field rendering — `or "—"` fallback instead of `.get()` default (handles explicit None values)
 
 ### Stage 1: Triage Pipeline
 - Formats pipe-delimited prompt per category (CNS adds CNS Position/Direction, DVP adds Settlement Type, etc.)
@@ -116,12 +133,20 @@ All translated to plain English in the UI:
 ### File Structure
 ```
 dashboard/
-├── dashboard.py          # Single-file Streamlit app (1,205 lines)
+├── dashboard.py          # Single-file Streamlit app (~1,750 lines)
 ├── dashboard_status.md   # This file
 ├── plan.md               # Reference implementation plan
 ├── requirements.txt      # streamlit, pandas, requests
 ├── .streamlit/
-│   └── config.toml       # Dark theme, port 8501
+│   └── config.toml       # Dark theme (cyan accent), port 8501
+├── fails monitorimg/     # Reference HTML/React design
+│   ├── FinOps Resolver.html
+│   └── src/
+│       ├── app.jsx
+│       ├── data.js
+│       ├── detail.jsx
+│       ├── queue.jsx
+│       └── styles.css
 ├── .gitignore
 └── .venv/                # Python virtual environment
 ```
@@ -145,6 +170,10 @@ Tell the assistant:
 
 ## Commit History
 ```
+d71b5f1 Fix CNS fails to show "vs CNS" and add randomized FTR generation
+00e3f79 Replace HTML queue table with selectable st.dataframe and fix None crash
+b77f209 Port FinOps Resolver HTML design to Streamlit dashboard
+a090b9e Add project status document for session continuity
 e6acbef Preserve resolver thinking trace instead of stripping it
 5b15f9b Add Phase 3: Stage 2 resolver pipeline with full two-stage flow
 dab6534 Add Phase 2: Stage 1 triage pipeline with plain English display
