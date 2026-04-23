@@ -123,29 +123,48 @@ PRIME_BROKERS = [
     "Citigroup Prime Finance", "Barclays Prime Services",
     "Deutsche Bank Prime Finance", "UBS Prime Services",
     "Wells Fargo Prime Services", "Credit Suisse Prime Services",
+    "BNP Paribas Prime Brokerage", "Societe Generale Prime Services",
+    "HSBC Prime Finance", "Nomura Prime Brokerage",
+    "Mizuho Prime Services", "MUFG Prime Brokerage",
 ]
 
 EXECUTION_BROKERS = [
+    # Market makers
     "Citadel Securities", "Virtu Financial", "Jane Street",
-    "Two Sigma", "Susquehanna", "Optiver", "IMC Financial Markets",
-    "Flow Traders", "Wolverine Trading", "DRW Securities",
-    "Knight Capital", "Instinet", "Virtu ITG",
-    "Cowen Execution Services", "Canaccord Genuity",
-    "Convergex", "Liquidnet", "Wedbush Securities",
+    "Two Sigma Securities", "Susquehanna (SIG)", "Optiver",
+    "IMC Financial Markets", "Flow Traders", "Wolverine Trading",
+    "DRW Securities", "Hudson River Trading", "Tower Research Capital",
+    "Jump Trading", "XTX Markets", "GTS Securities",
+    "Akuna Capital", "Old Mission Capital", "Headlands Technologies",
+    "Tradebot Systems", "Belvedere Trading",
+    # Bulge bracket / execution
     "Goldman Sachs", "Morgan Stanley", "JPMorgan",
     "Bank of America Securities", "Citigroup Global Markets",
     "Barclays Capital", "Deutsche Bank Securities",
     "UBS Securities", "Wells Fargo Securities",
+    "BNP Paribas Securities", "Societe Generale",
+    "HSBC Securities", "Nomura Securities",
+    "Mizuho Securities", "MUFG Securities",
+    "Credit Agricole Securities", "Macquarie Capital",
+    # Mid-market / regional
     "Jefferies", "RBC Capital Markets", "TD Securities",
     "Piper Sandler", "Raymond James", "Baird",
     "Oppenheimer", "Cantor Fitzgerald", "Stifel",
     "Needham", "Cowen", "B. Riley Securities",
     "Janney Montgomery Scott", "Ladenburg Thalmann",
+    "Instinet", "Liquidnet", "Wedbush Securities",
+    "Canaccord Genuity", "Guggenheim Securities",
+    "Evercore ISI", "Lazard Capital Markets",
+    "William Blair", "KeyBanc Capital Markets",
+    "Stephens Inc.", "Truist Securities",
+    "BMO Capital Markets", "CIBC World Markets",
+    "Scotia Capital", "National Bank Financial",
 ]
 
 TOP_BROKER_DTCS = [
     "0005", "0050", "0062", "0089", "0161", "0164", "0188",
     "0226", "0235", "0352", "0385", "0417", "0443", "0499", "0551",
+    "0571", "0600", "0627", "0658", "0694", "0725", "0769", "0801",
 ]
 
 CUSIP_POOL = [
@@ -174,6 +193,41 @@ CUSIP_POOL = [
     "624756102",  # MSCI
     "084670702",  # BRK
     "713448108",  # PEP
+    "46284V101",  # INTC
+    "61174X109",  # MSTR
+    "92826C839",  # V
+    "22160K105",  # COST
+    "931142103",  # WMT
+    "872541109",  # TXN
+    "478160104",  # JNJ
+    "007903107",  # AMD
+    "00724F101",  # ADBE
+    "91324P102",  # UNH
+    "670346105",  # NKE
+    "110122108",  # BAC
+    "808513105",  # SCHW
+    "20825C104",  # COP
+    "532457108",  # LLY
+    "717081103",  # PFE
+    "459200101",  # IBM
+    "09857L108",  # BKNG
+    "126650100",  # CVS
+    "747525103",  # QCOM
+    "02376R102",  # AAL
+    "548661107",  # LOW
+    "17275R102",  # CSGS
+    "92343V104",  # VZ
+    "00206R102",  # T
+    "38141G104",  # GS
+    "60871R209",  # MS
+    "46266C105",  # ISRG
+    "58933Y105",  # MA
+    "369604301",  # GE
+    "166764100",  # CVX
+    "89236T104",  # TMUS
+    "30303M102",  # META
+    "79466L302",  # CRM
+    "44919P508",  # HYMC
 ]
 
 
@@ -794,6 +848,41 @@ CUSIP_INFO = {
     "624756102": ("MSCI", "MSCI Inc."),
     "084670702": ("BRK.B", "Berkshire Hathaway"),
     "713448108": ("PEP", "PepsiCo"),
+    "46284V101": ("INTC", "Intel"),
+    "61174X109": ("MSTR", "MicroStrategy"),
+    "92826C839": ("V", "Visa"),
+    "22160K105": ("COST", "Costco"),
+    "931142103": ("WMT", "Walmart"),
+    "872541109": ("TXN", "Texas Instruments"),
+    "478160104": ("JNJ", "Johnson & Johnson"),
+    "007903107": ("AMD", "AMD"),
+    "00724F101": ("ADBE", "Adobe"),
+    "91324P102": ("UNH", "UnitedHealth"),
+    "670346105": ("NKE", "Nike"),
+    "110122108": ("BAC", "Bank of America"),
+    "808513105": ("SCHW", "Charles Schwab"),
+    "20825C104": ("COP", "ConocoPhillips"),
+    "532457108": ("LLY", "Eli Lilly"),
+    "717081103": ("PFE", "Pfizer"),
+    "459200101": ("IBM", "IBM"),
+    "09857L108": ("BKNG", "Booking Holdings"),
+    "126650100": ("CVS", "CVS Health"),
+    "747525103": ("QCOM", "Qualcomm"),
+    "02376R102": ("AAL", "American Airlines"),
+    "548661107": ("LOW", "Lowe's"),
+    "17275R102": ("CSGS", "CSG Systems"),
+    "92343V104": ("VZ", "Verizon"),
+    "00206R102": ("T", "AT&T"),
+    "38141G104": ("GS", "Goldman Sachs"),
+    "60871R209": ("MS", "Morgan Stanley"),
+    "46266C105": ("ISRG", "Intuitive Surgical"),
+    "58933Y105": ("MA", "Mastercard"),
+    "369604301": ("GE", "GE Aerospace"),
+    "166764100": ("CVX", "Chevron"),
+    "89236T104": ("TMUS", "T-Mobile"),
+    "30303M102": ("META", "Meta Platforms"),
+    "79466L302": ("CRM", "Salesforce"),
+    "44919P508": ("HYMC", "Hycroft Mining"),
 }
 
 
@@ -1579,7 +1668,7 @@ if not fails:
     )
     gc1, gc2, gc3 = st.columns([1, 0.5, 1])
     with gc2:
-        fail_count = st.slider("Fails to Generate", min_value=1, max_value=50, value=10, key="fail_count_init")
+        fail_count = st.slider("Fails to Generate", min_value=1, max_value=1000, value=10, key="fail_count_init")
         if st.button("GENERATE FAILS", type="primary", use_container_width=True):
             fails_list, dtc_map = generate_fails(fail_count)
             for i, f in enumerate(fails_list):
@@ -1626,7 +1715,7 @@ ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4, ctrl_c5 = st.columns([0.5, 1.5, 1.2, 0.6, 0.
 
 with ctrl_c1:
     fail_count = st.number_input(
-        "Count", min_value=1, max_value=50, value=10, key="fail_count",
+        "Count", min_value=1, max_value=1000, value=10, key="fail_count",
         label_visibility="collapsed",
     )
     if st.button("GENERATE", type="primary", use_container_width=True):
