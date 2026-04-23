@@ -687,7 +687,7 @@ def call_triage(endpoint_url, fail):
         "stream": False,
     }
     try:
-        resp = requests.post(url, json=payload, timeout=120)
+        resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
         parsed = json.loads(content)
@@ -804,7 +804,7 @@ def call_resolver(endpoint_url, fail, triage_data):
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=180)
+        resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
         thinking, json_text = parse_think_response(content)
@@ -2164,6 +2164,7 @@ with right_col:
                     if not _is_connected():
                         st.warning("Cannot reach Ollama or required models are missing. Check the endpoint URL in the sidebar.")
                     else:
+                        st.info("First run may take up to 2 minutes while the AI model loads. Subsequent runs will be faster.")
                         with st.spinner("Stage 1: Analyzing fail record..."):
                             result = call_triage(st.session_state["ollama_url"], fail)
                         if result["ok"]:
@@ -2205,6 +2206,7 @@ with right_col:
                         st.warning("Cannot reach Ollama or required models are missing. Check the endpoint URL in the sidebar.")
                     else:
                         t_data = eff_triage["data"]
+                        st.info("First run may take up to 2 minutes while the AI model loads. Subsequent runs will be faster.")
                         with st.spinner("Stage 2: Generating resolution plan..."):
                             res_result = call_resolver(
                                 st.session_state["ollama_url"], fail, t_data
