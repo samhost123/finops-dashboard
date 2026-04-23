@@ -686,12 +686,14 @@ def call_triage(endpoint_url, fail):
         ],
         "stream": False,
         "options": {"num_ctx": 2048},
+        "think": False,
     }
     try:
         resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        parsed = json.loads(content)
+        _, json_text = parse_think_response(content)
+        parsed = json.loads(json_text)
         if not isinstance(parsed, dict):
             return {"ok": False, "error": "Stage 1 returned an unexpected response format. Try again."}
         return {"ok": True, "data": parsed, "raw_prompt": prompt, "raw_content": content}
@@ -803,6 +805,7 @@ def call_resolver(endpoint_url, fail, triage_data):
         ],
         "stream": False,
         "options": {"num_ctx": 2048},
+        "think": False,
     }
 
     try:
