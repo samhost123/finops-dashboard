@@ -81,6 +81,8 @@ CATEGORY_WEIGHTS = [0.35, 0.25, 0.20, 0.12, 0.08]
 
 CATEGORY_DISPLAY = {
     "CNS_FAIL": "CNS Fail",
+    "CNS_FTD": "CNS Fail to Deliver",
+    "CNS_FTR": "CNS Fail to Receive",
     "DVP_FAIL": "DVP Fail",
     "B2B_PENDING": "Broker-to-Broker Pending",
     "CA_EVENT": "Corporate Action",
@@ -450,8 +452,16 @@ def generate_fail(dtc_firm_map):
 
     triage = generate_triage_multi_category(ftd_qty, ftrs)
     category = triage["category"]
+    cns_direction = triage.get("cns_direction", "N_A")
 
-    firm_name = _pick_firm(category, cp_dtc, dtc_firm_map)
+    if category == "CNS_FAIL":
+        firm_name = "CNS"
+    else:
+        firm_name = _pick_firm(category, cp_dtc, dtc_firm_map)
+
+    if category == "CNS_FAIL" and cns_direction == "FTR":
+        side = "Buy"
+        ftd_qty, ftr_total = ftr_total, ftd_qty
     inventory = generate_inventory()
 
     for ftr in ftrs:
@@ -477,7 +487,8 @@ def generate_fail(dtc_firm_map):
         "firm_name": firm_name,
         "dtc": f"DTC-{cp_dtc}",
         "account": account,
-        "category": triage["category"],
+        "category": f"CNS_{cns_direction}" if category == "CNS_FAIL" else triage["category"],
+        "cns_direction": cns_direction,
         "side": side,
         "ftd_qty": ftd_qty,
         "market_value": market_value,
@@ -559,7 +570,7 @@ def format_triage_prompt(fail):
     category = fail["category"]
     cns_dir = fail["triage"]["cns_direction"]
 
-    if category == "CNS_FAIL":
+    if category.startswith("CNS_"):
         sign = "-" if cns_dir == "FTD" else "+"
         parts.append(f"CNS Position: {sign}{fail['ftd_qty']}")
         parts.append(f"CNS Direction: {cns_dir}")
@@ -1509,7 +1520,7 @@ with left_col:
             "TICKER": _ticker(f["cusip"]),
             "CUSIP": f["cusip"],
             "TYPE": CATEGORY_DISPLAY.get(f["category"], f["category"]),
-            "COUNTERPARTY": f["firm_name"],
+            "COUNTERPARTY": "vs CNS" if f["firm_name"] == "CNS" else f["firm_name"],
             "ACCT": f["account"],
             "SHARES": f["ftd_qty"],
             "NOTIONAL": f["market_value"],
@@ -1563,7 +1574,7 @@ with right_col:
         f'<div class="fo-fail-sub">'
         f'{fail["ftd_qty"]:,} sh · {_fmt_mv(fail["market_value"])} notional'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
-        f'{_esc(fail["firm_name"])} {"(PB)" if prime else "(Exec)"}'
+        f'{"vs CNS" if fail["firm_name"] == "CNS" else _esc(fail["firm_name"]) + (" (PB)" if prime else " (Exec)")}'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
         f'{_esc(fail["account"])}'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
