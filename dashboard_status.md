@@ -3,7 +3,7 @@
 **Last updated:** 2026-04-22
 **Repo:** `samhost123/finops-dashboard` (private, GitHub)
 **Branch:** `main` — all work committed and pushed
-**Main file:** `dashboard.py` (~1,750 lines, single-file Streamlit app)
+**Main file:** `dashboard.py` (~2,200 lines, single-file Streamlit app)
 
 ---
 
@@ -16,12 +16,12 @@
 | 2 — Stage 1 Triage Pipeline | Done | `dab6534` |
 | 3 — Stage 2 Resolver Pipeline | Done | `5b15f9b`, `e6acbef` |
 | UI — Trader-Desk Redesign | Done | `b77f209`, `00e3f79`, `d71b5f1` |
-| 4 — Batch Processing & KPI Metrics | **Not started** | — |
-| 5 — Polish & Deployment | **Not started** | — |
+| 4 — Batch Processing & KPI Metrics | Done | `defd810` |
+| 5 — Polish & Deployment | Done | *(this commit)* |
 
 ---
 
-## What's Built (Phases 0-3)
+## What's Built (Phases 0-5)
 
 ### Data Generation
 - Generates 1-50 synthetic settlement fails with realistic data
@@ -37,13 +37,13 @@
 - Custom CSS overrides for Streamlit internals (hidden header/footer, reduced padding)
 - **Top bar** with branding, model status indicators, Ollama connection, UTC clock
 - **KPI strip** — 7 metrics: Open Fails, Critical, Needs Escalation, Avg Coverage, Gridlock, Reg SHO, Notional Exposure
-- **Inline controls** — generate (count + button), filter radio (ALL/CRITICAL/HIGH/MEDIUM/LOW/REG SHO/GRIDLOCK), stage toggle (Both/Stage 1/Stage 2), Test Ollama — no sidebar needed
-- **Selectable queue table** — `st.dataframe` with `on_select="rerun"` and `selection_mode="single-row"` for click-to-select rows; coverage column as progress bar
+- **Inline controls** — generate (count + button), filter radio (ALL/CRITICAL/HIGH/MEDIUM/LOW/REG SHO/GRIDLOCK), stage toggle (Both/Stage 1/Stage 2), Analyze All/Cancel, Test Ollama — no sidebar needed
+- **Selectable queue table** — `st.dataframe` with `on_select="rerun"` and `selection_mode="single-row"` for click-to-select rows; coverage column as progress bar; STATUS column showing analysis state per fail
 - **Two-pane layout** — `st.columns([1.1, 1])`: queue table (left) + detail panel (right)
 - **Detail panel** — fail header with tier/REG SHO/gridlock chips, 6-cell metric strip (priority, tier, age, coverage, reg sho, flags)
 - **Stage cards** — Stage 1 (Triage) and Stage 2 (Resolution) side by side via nested `st.columns(2)`
 - **AI reasoning trace** — collapsible expander showing resolver thinking steps
-- **Status bar** — environment, data source, pipeline info
+- **Status bar** — environment, data source, pipeline info, analyzed count
 - CUSIP-to-ticker/name mapping (`CUSIP_INFO`) for human-readable security display
 - All CSS classes prefixed `fo-` to avoid Streamlit conflicts
 
@@ -59,7 +59,6 @@
 - Displays: priority score (large colored number), tier (colored badge), escalation level (plain English), assessment, deadline, flags (translated to human-readable)
 - Case-insensitive display lookups (model returns lowercase)
 - Connection gate — warns if Ollama not connected before calling
-- Debug expanders: selected fail verification, triage prompt, raw response
 
 ### Stage 2: Resolver Pipeline
 - "Run Stage 2: Resolution" button appears only after Stage 1 completes
@@ -74,42 +73,31 @@
 - **Escalation banner** — amber with reason if required, green if not
 - **Fallback strategy** — plain English paragraph
 - **Narrative** — model's resolution summary
-- Debug expanders: resolver prompt, raw response (with think block), parsed JSON
 - Null-safe: handles model returning None for numeric fields
+
+### Phase 4: Batch Processing & KPI Metrics
+- **"Analyze All"** button runs every generated fail through Stage 1 + Stage 2 sequentially
+- **Progress indicator** — `st.progress` bar with current fail info, estimated time remaining
+- **Cancel** — `on_click` callback sets `cancel_batch` flag, checked between each fail
+- **Batch results** stored in `st.session_state["batch_results"]` — individual runs also write here
+- **KPI strip** updates from real AI results after analysis (Critical, Escalation, Avg Coverage, Gridlock, Reg SHO); shows "—" before analysis
+- **Queue STATUS column** — per-row status: "✓ Analyzed", "○ Pending", "✗ Triage Err", "⚠ Resolve Err", "½ Triage"
+- **Per-fail error handling** — triage errors skip resolver, resolver errors keep triage, never stops entire batch
+- **Unified result access** — detail panel checks individual results first, then batch results
+
+### Phase 5: Polish & Deployment Readiness
+- **Error handling sweep** — all model calls, JSON parsing, and network requests wrapped in try/except with plain English messages; AI model response validated as dict; no Python tracebacks reach the UI
+- **Session state persistence** — all critical state persists across Streamlit reruns; no data loss on interaction
+- **CSV export** — one row per fail with: Security, Counterparty, Fail Type, Shares, Market Value, Age, Priority Score, Priority Tier, Escalation Required, Coverage %, Gridlock Detected, Resolution Summary, Reg SHO Flag; filename `finops-report-YYYY-MM-DD.csv`
+- **PDF export** — via reportlab: cover page with title/date/KPI summary, one section per fail with triage results, resolution steps in plain English, coverage, escalation status; no JSON or technical jargon; filename `finops-report-YYYY-MM-DD.pdf`
+- **Export buttons** — `st.download_button` for CSV and PDF; only visible after analysis has run
+- **Debug expanders removed** — all 4 debug expanders (triage prompt, raw triage response, resolver prompt, raw resolver response) removed; "View AI Reasoning" expander preserved as a feature
+- **RunPod deployment ready** — `.streamlit/config.toml` has `server.address = 0.0.0.0`, port 8501; `reportlab` added to requirements.txt
 
 ### Infrastructure
 - `.streamlit/config.toml` — dark theme, port 8501, address 0.0.0.0
-- `.venv/` — Python virtual environment with streamlit, pandas, requests
+- `.venv/` — Python virtual environment with streamlit, pandas, requests, reportlab
 - `.gitignore` — excludes `__pycache__/`
-
----
-
-## What's Next
-
-### Phase 4 — Batch Processing & KPI Metrics
-Per `plan.md`:
-- "Analyze All Fails" button — runs every generated fail through Stage 1 + Stage 2 sequentially
-- Progress bar showing X/N complete with estimated time remaining
-- Allow cancellation
-- Summary metrics row updates after batch:
-  - Total Fails (already works)
-  - Critical Priority (count)
-  - Escalation Required (count)
-  - Avg Coverage (percentage)
-  - Gridlock Detected (count)
-- Store results in `st.session_state`
-
-### Phase 5 — Polish & Deployment
-Per `plan.md`:
-- Mobile responsiveness (single-column layout on small screens)
-- Error handling sweep (no stack traces ever)
-- Session state persistence across reruns
-- Export/Download Report:
-  - CSV: one row per fail with all pipeline outputs
-  - PDF: formatted report with KPI strip + per-fail sections (via reportlab or weasyprint)
-  - `st.download_button` for both
-  - Filename: `finops-report-YYYY-MM-DD.pdf` / `.csv`
-- RunPod deployment readiness
 
 ---
 
@@ -133,10 +121,10 @@ All translated to plain English in the UI:
 ### File Structure
 ```
 dashboard/
-├── dashboard.py          # Single-file Streamlit app (~1,750 lines)
+├── dashboard.py          # Single-file Streamlit app (~2,200 lines)
 ├── dashboard_status.md   # This file
 ├── plan.md               # Reference implementation plan
-├── requirements.txt      # streamlit, pandas, requests
+├── requirements.txt      # streamlit, pandas, requests, reportlab
 ├── .streamlit/
 │   └── config.toml       # Dark theme (cyan accent), port 8501
 ├── fails monitorimg/     # Reference HTML/React design
@@ -159,26 +147,13 @@ streamlit run dashboard.py
 # Open http://localhost:8501
 ```
 
+### RunPod Deployment
+```bash
+streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+```
+
 ### How to Resume with AI
 Tell the assistant:
 1. Read `dashboard/plan.md` for the full implementation plan
 2. Read `dashboard/dashboard_status.md` (this file) for current state
-3. "Begin Phase 4" (or whichever phase is next)
-4. Confirm each phase works before proceeding to the next
-
----
-
-## Commit History
-```
-d71b5f1 Fix CNS fails to show "vs CNS" and add randomized FTR generation
-00e3f79 Replace HTML queue table with selectable st.dataframe and fix None crash
-b77f209 Port FinOps Resolver HTML design to Streamlit dashboard
-a090b9e Add project status document for session continuity
-e6acbef Preserve resolver thinking trace instead of stripping it
-5b15f9b Add Phase 3: Stage 2 resolver pipeline with full two-stage flow
-dab6534 Add Phase 2: Stage 1 triage pipeline with plain English display
-6d9f95b Update firm pools: prime brokers vs execution brokers
-d5ba8ab Add Phase 1: Ollama connectivity health check
-a8b372e Add Phase 0: fail generator, dark-themed dashboard, config
-23b2c45 Add staged implementation plan for executive dashboard
-```
+3. All phases are complete — project is deployment-ready

@@ -1,5 +1,6 @@
 """FinOps Resolver — Post-Trade Fail Desk"""
 
+import io
 import json
 import random
 import re
@@ -10,6 +11,13 @@ from html import escape as _esc
 
 import pandas as pd
 import requests
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+)
 import streamlit as st
 
 
@@ -609,15 +617,18 @@ def call_triage(endpoint_url, fail):
         resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        return {"ok": True, "data": json.loads(content), "raw_prompt": prompt, "raw_content": content}
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            return {"ok": False, "error": "Stage 1 returned an unexpected response format. Try again."}
+        return {"ok": True, "data": parsed, "raw_prompt": prompt, "raw_content": content}
     except requests.exceptions.Timeout:
         return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
     except requests.exceptions.ConnectionError:
-        return {"ok": False, "error": "Stage 1 triage timed out. Try again or check the Ollama endpoint."}
+        return {"ok": False, "error": "Could not reach the AI models. Check that Ollama is running."}
     except (json.JSONDecodeError, KeyError, ValueError):
         return {"ok": False, "error": "Stage 1 returned an unexpected response. Try again."}
     except Exception:
-        return {"ok": False, "error": "Stage 1 returned an unexpected response. Try again."}
+        return {"ok": False, "error": "Stage 1 encountered an unexpected error. Try again."}
 
 
 def _is_connected():
@@ -721,9 +732,12 @@ def call_resolver(endpoint_url, fail, triage_data):
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
         thinking, json_text = parse_think_response(content)
+        parsed = json.loads(json_text)
+        if not isinstance(parsed, dict):
+            return {"ok": False, "error": "Stage 2 returned an unexpected response format. Try again."}
         return {
             "ok": True,
-            "data": json.loads(json_text),
+            "data": parsed,
             "thinking": thinking,
             "raw_prompt": prompt,
             "raw_content": content,
@@ -736,7 +750,7 @@ def call_resolver(endpoint_url, fail, triage_data):
     except requests.exceptions.ConnectionError:
         return {
             "ok": False,
-            "error": "Stage 2 could not reach the AI models. Check Ollama endpoint.",
+            "error": "Could not reach the AI models. Check that Ollama is running.",
         }
     except (json.JSONDecodeError, KeyError, ValueError):
         return {
@@ -746,7 +760,7 @@ def call_resolver(endpoint_url, fail, triage_data):
     except Exception:
         return {
             "ok": False,
-            "error": "Stage 2 returned an unexpected response. Try again.",
+            "error": "Stage 2 encountered an unexpected error. Try again.",
         }
 
 
@@ -847,6 +861,192 @@ def _apply_filter(fails, filt):
     if filt == "GRIDLOCK":
         return [f for f in fails if _has_gridlock(f)]
     return [f for f in fails if f["priority_tier"] == filt]
+
+
+# ---------------------------------------------------------------------------
+# Export — CSV and PDF report generation
+# ---------------------------------------------------------------------------
+
+def build_csv(fails, batch_results):
+    rows = []
+    for f in fails:
+        fid = f.get("_id", "")
+        br = batch_results.get(fid, {})
+        t = br.get("triage", {}).get("data", {}) if br.get("triage", {}).get("ok") else {}
+        r = br.get("resolver", {}).get("data", {}) if br.get("resolver", {}).get("ok") else {}
+        ticker = _ticker(f["cusip"])
+        name = _ticker_name(f["cusip"])
+        rows.append({
+            "Security": f"{ticker} ({name}) — {f['cusip']}",
+            "Counterparty": "vs CNS" if f["firm_name"] == "CNS" else f["firm_name"],
+            "Fail Type": CATEGORY_DISPLAY.get(f["category"], f["category"]),
+            "Shares": f["ftd_qty"],
+            "Market Value": round(f["market_value"], 2),
+            "Age (Days)": f["age_days"],
+            "Priority Score": t.get("priority_score", ""),
+            "Priority Tier": (t.get("priority_tier") or "").upper() if t else "",
+            "Escalation Required": "Yes" if r.get("escalation_required") else ("No" if r else ""),
+            "Coverage %": round(r.get("total_coverable", 0) or 0) / f["ftd_qty"] * 100 if r and f["ftd_qty"] > 0 else "",
+            "Gridlock Detected": "Yes" if r.get("gridlock_detected") else ("No" if r else ""),
+            "Resolution Summary": r.get("narrative", ""),
+            "Reg SHO": "Yes" if f["reg_sho"] else "No",
+        })
+    df = pd.DataFrame(rows)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    return buf.getvalue()
+
+
+def build_pdf(fails, batch_results, kpi_data):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle("PDFTitle", parent=styles["Title"], fontSize=22,
+                                  textColor=colors.HexColor("#1a1a2e"), spaceAfter=4)
+    sub_style = ParagraphStyle("PDFSub", parent=styles["Normal"], fontSize=10,
+                                textColor=colors.HexColor("#666666"), spaceAfter=20)
+    h2_style = ParagraphStyle("PDFH2", parent=styles["Heading2"], fontSize=14,
+                               textColor=colors.HexColor("#1a1a2e"), spaceBefore=16, spaceAfter=8)
+    body_style = ParagraphStyle("PDFBody", parent=styles["Normal"], fontSize=10,
+                                 leading=14, textColor=colors.HexColor("#333333"))
+    label_style = ParagraphStyle("PDFLabel", parent=styles["Normal"], fontSize=9,
+                                  textColor=colors.HexColor("#888888"))
+    val_style = ParagraphStyle("PDFVal", parent=styles["Normal"], fontSize=11,
+                                fontName="Helvetica-Bold", textColor=colors.HexColor("#1a1a2e"))
+
+    elements = []
+
+    elements.append(Paragraph("FinOps Resolver Report", title_style))
+    elements.append(Paragraph(f"Generated {date.today().strftime('%B %d, %Y')} · {len(fails)} fails analyzed", sub_style))
+
+    kpi_rows = [[
+        Paragraph("Open Fails", label_style),
+        Paragraph("Critical", label_style),
+        Paragraph("Escalation", label_style),
+        Paragraph("Avg Coverage", label_style),
+        Paragraph("Gridlock", label_style),
+        Paragraph("Reg SHO", label_style),
+    ], [
+        Paragraph(str(kpi_data["total"]), val_style),
+        Paragraph(str(kpi_data["critical"]), val_style),
+        Paragraph(str(kpi_data["escalation"]), val_style),
+        Paragraph(kpi_data["avg_cov"], val_style),
+        Paragraph(str(kpi_data["gridlock"]), val_style),
+        Paragraph(str(kpi_data["regsho"]), val_style),
+    ]]
+    kpi_table = Table(kpi_rows, colWidths=[1.1 * inch] * 6)
+    kpi_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f5")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#fafbfc")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d0d5dd")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(kpi_table)
+    elements.append(Spacer(1, 16))
+    elements.append(HRFlowable(width="100%", color=colors.HexColor("#d0d5dd")))
+    elements.append(Spacer(1, 8))
+
+    for f in fails:
+        fid = f.get("_id", "")
+        br = batch_results.get(fid, {})
+        has_triage = br.get("triage", {}).get("ok", False)
+        has_resolver = br.get("resolver", {}).get("ok", False)
+        t = br.get("triage", {}).get("data", {}) if has_triage else {}
+        r = br.get("resolver", {}).get("data", {}) if has_resolver else {}
+
+        ticker = _ticker(f["cusip"])
+        name = _ticker_name(f["cusip"])
+        cat = CATEGORY_DISPLAY.get(f["category"], f["category"])
+        cp = "vs CNS" if f["firm_name"] == "CNS" else f["firm_name"]
+
+        elements.append(Paragraph(
+            f"{cat} — {ticker} ({name})",
+            h2_style,
+        ))
+        elements.append(Paragraph(
+            f"{f['ftd_qty']:,} shares · {_fmt_mv(f['market_value'])} notional · "
+            f"{cp} · Age {f['age_days']}d"
+            f"{' · Reg SHO' if f['reg_sho'] else ''}",
+            body_style,
+        ))
+        elements.append(Spacer(1, 6))
+
+        if has_triage:
+            tier = (t.get("priority_tier") or "—").upper()
+            score = t.get("priority_score", "—")
+            esc_lvl = (t.get("escalation_level") or "NONE").upper()
+            esc_text = ESCALATION_DISPLAY_FULL.get(esc_lvl, esc_lvl)
+            reason = t.get("reason") or "—"
+            flags = t.get("flags", [])
+            flag_text = ", ".join(
+                FLAG_DISPLAY.get(fl.upper() if isinstance(fl, str) else fl, fl) for fl in flags
+            ) if flags else "None"
+
+            elements.append(Paragraph(
+                f"<b>Triage:</b> Priority {score} ({tier}) · Escalation: {esc_text}",
+                body_style,
+            ))
+            elements.append(Paragraph(f"Assessment: {reason}", body_style))
+            elements.append(Paragraph(f"Flags: {flag_text}", body_style))
+            elements.append(Spacer(1, 4))
+
+        if has_resolver:
+            dtc_map_pdf = {}
+            steps = r.get("resolution_steps", [])
+            if steps:
+                elements.append(Paragraph("<b>Resolution Steps:</b>", body_style))
+                for step in steps:
+                    num = step.get("step", "?")
+                    action = step.get("action", "UNKNOWN").upper()
+                    atxt = ACTION_DISPLAY.get(action, action)
+                    qty = step.get("qty", 0) or 0
+                    dtc_code = step.get("dtc", "")
+                    elements.append(Paragraph(
+                        f"&nbsp;&nbsp;{num}. {atxt} — {qty:,} shares{f' from {dtc_code}' if dtc_code else ''}",
+                        body_style,
+                    ))
+
+            total_cov = r.get("total_coverable", 0) or 0
+            cov_pct = round(total_cov / f["ftd_qty"] * 100, 1) if f["ftd_qty"] > 0 else 0
+            residual = r.get("residual_short", 0) or 0
+            elements.append(Paragraph(
+                f"<b>Coverage:</b> {cov_pct}% · Residual short: {residual:,} shares",
+                body_style,
+            ))
+
+            gridlock = r.get("gridlock_detected", False)
+            elements.append(Paragraph(
+                f"<b>Gridlock:</b> {'Detected — coordinated outreach required' if gridlock else 'Not detected'}",
+                body_style,
+            ))
+
+            esc_req = r.get("escalation_required", False)
+            esc_reason = r.get("escalation_reason", "")
+            esc_line = "Required" + (f" — {esc_reason}" if esc_reason else "") if esc_req else "Not required"
+            elements.append(Paragraph(f"<b>Escalation:</b> {esc_line}", body_style))
+
+            narrative = r.get("narrative", "")
+            if narrative:
+                elements.append(Spacer(1, 4))
+                elements.append(Paragraph(f"<b>Summary:</b> {narrative}", body_style))
+
+            fb = r.get("fallback_strategy")
+            if fb:
+                fb_text = FALLBACK_DISPLAY.get(fb, fb.lower().replace("_", " "))
+                elements.append(Paragraph(f"<b>Fallback:</b> {fb_text}", body_style))
+
+        elif not has_triage:
+            elements.append(Paragraph("<i>Not analyzed</i>", body_style))
+
+        elements.append(Spacer(1, 6))
+        elements.append(HRFlowable(width="100%", color=colors.HexColor("#e0e0e0")))
+        elements.append(Spacer(1, 4))
+
+    doc.build(elements)
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -1507,6 +1707,49 @@ if st.session_state.get("batch_running") and not st.session_state.get("cancel_ba
         _finfo = f" — {_cf['cusip']} ({_ticker(_cf['cusip'])})"
     st.progress(_pct, text=f"Analyzing fail {_bi + 1}/{_bt}{_finfo}{_eta}")
 
+# ---- Export buttons ----
+_br_export = st.session_state.get("batch_results", {})
+_has_export_data = any(r.get("triage", {}).get("ok") or r.get("resolver", {}).get("ok") for r in _br_export.values())
+if _has_export_data:
+    _ex1, _ex2, _ex3 = st.columns([4, 0.5, 0.5])
+    _today = date.today().strftime("%Y-%m-%d")
+    with _ex2:
+        _csv_data = build_csv(fails, _br_export)
+        st.download_button("CSV", _csv_data, f"finops-report-{_today}.csv", "text/csv",
+                           use_container_width=True, key="dl_csv")
+    with _ex3:
+        _kpi_for_pdf = {
+            "total": len(fails),
+            "critical": sum(1 for r in _br_export.values()
+                            if r.get("triage", {}).get("ok") and
+                            (r["triage"]["data"].get("priority_tier") or "").upper() == "CRITICAL"),
+            "escalation": sum(1 for r in _br_export.values()
+                              if r.get("resolver", {}).get("ok") and
+                              r["resolver"]["data"].get("escalation_required")),
+            "avg_cov": "—",
+            "gridlock": sum(1 for r in _br_export.values()
+                            if r.get("resolver", {}).get("ok") and
+                            r["resolver"]["data"].get("gridlock_detected")),
+            "regsho": sum(1 for r in _br_export.values()
+                          if r.get("triage", {}).get("ok") and
+                          any(fl.upper() in ("REG_SHO", "REG_SHO_CLOSE_OUT", "REG_SHO_CLOSEOUT")
+                              for fl in r["triage"]["data"].get("flags", [])
+                              if isinstance(fl, str))),
+        }
+        _fmap_pdf = {f["_id"]: f for f in fails}
+        _covs_pdf = []
+        for _fid_e, _re in _br_export.items():
+            if _re.get("resolver", {}).get("ok"):
+                _tc_e = _re["resolver"]["data"].get("total_coverable", 0) or 0
+                _fl_e = _fmap_pdf.get(_fid_e)
+                if _fl_e and _fl_e["ftd_qty"] > 0:
+                    _covs_pdf.append(_tc_e / _fl_e["ftd_qty"] * 100)
+        if _covs_pdf:
+            _kpi_for_pdf["avg_cov"] = f"{round(sum(_covs_pdf) / len(_covs_pdf))}%"
+        _pdf_data = build_pdf(fails, _br_export, _kpi_for_pdf)
+        st.download_button("PDF", _pdf_data, f"finops-report-{_today}.pdf", "application/pdf",
+                           use_container_width=True, key="dl_pdf")
+
 # ---- KPI strip ----
 total = len(fails)
 notional = sum(f["market_value"] for f in fails)
@@ -1816,11 +2059,6 @@ with right_col:
                             st.rerun()
                         else:
                             st.error(result["error"])
-            if has_ai_triage and eff_triage:
-                with st.expander("DEBUG: TRIAGE PROMPT"):
-                    st.code(eff_triage.get("raw_prompt", ""), language="text")
-                with st.expander("DEBUG: RAW TRIAGE RESPONSE"):
-                    st.code(eff_triage.get("raw_content", ""), language="json")
 
     # -- Stage 2 --
     if show_s2 and sc2 is not None:
@@ -1831,10 +2069,6 @@ with right_col:
                     _render_stage2_html(fail, eff_resolver["data"], dtc_map),
                     unsafe_allow_html=True,
                 )
-                with st.expander("DEBUG: RESOLVER PROMPT"):
-                    st.code(eff_resolver.get("raw_prompt", ""), language="json")
-                with st.expander("DEBUG: RAW RESOLVER RESPONSE"):
-                    st.code(eff_resolver.get("raw_content", ""), language="text")
             elif has_ai_triage:
                 st.markdown(
                     '<div class="fo-stage-card">'
