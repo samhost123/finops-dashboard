@@ -37,7 +37,7 @@ ok "script dir:  $SCRIPT_DIR"
 if [[ ! -f "$WORK/.deps_done" ]]; then
   log "installing system dependencies"
   apt-get update -qq
-  apt-get install -y -qq curl git python3-venv python3-pip
+  apt-get install -y -qq curl git python3-venv python3-pip zstd
   touch "$WORK/.deps_done"
   ok "system deps installed"
 else
@@ -91,19 +91,35 @@ else
 fi
 
 # ---------- 5. smoke-test both models ----------
-log "smoke-testing $TRIAGE_NAME"
-triage_resp=$(echo "ping" | ollama run "$TRIAGE_NAME" 2>&1 | head -c 500) \
-  || die "$TRIAGE_NAME failed to respond"
-if echo "$triage_resp" | grep -q "<think>"; then
+# Use the HTTP API directly: avoids SIGPIPE from `ollama run | head` under
+# pipefail, gives a clean error payload, and a generous timeout absorbs the
+# cold-start load (~30-60s on first call as the GGUF gets paged into VRAM).
+smoke_test() {
+  local name="$1"
+  local payload resp http
+  payload=$(printf '{"model":"%s","prompt":"ping","stream":false,"options":{"num_predict":8}}' "$name")
+  resp=$(curl -sS --max-time 180 -w '\n%{http_code}' \
+    -H 'Content-Type: application/json' \
+    "$OLLAMA_HOST/api/generate" -d "$payload") || {
+    die "$name: curl failed — is ollama still running? tail $WORK/ollama.log"
+  }
+  http=$(printf '%s' "$resp" | tail -n1)
+  body=$(printf '%s' "$resp" | sed '$d')
+  [[ "$http" == "200" ]] || die "$name: HTTP $http — body: $body"
+  printf '%s' "$body"
+}
+
+log "smoke-testing $TRIAGE_NAME (cold start may take up to 60s)"
+triage_body=$(smoke_test "$TRIAGE_NAME")
+if printf '%s' "$triage_body" | grep -q '<think>'; then
   warn "$TRIAGE_NAME response contained <think> — Modelfile fix may not be active"
-  echo "$triage_resp"
+  printf '%s\n' "$triage_body" | head -c 400; echo
 else
   ok "$TRIAGE_NAME responded cleanly (no <think> leak)"
 fi
 
-log "smoke-testing $RESOLVER_NAME"
-echo "ping" | ollama run "$RESOLVER_NAME" >/dev/null 2>&1 \
-  || die "$RESOLVER_NAME failed to respond"
+log "smoke-testing $RESOLVER_NAME (cold start may take up to 60s)"
+smoke_test "$RESOLVER_NAME" >/dev/null
 ok "$RESOLVER_NAME responded"
 
 # ---------- 6. python venv + dashboard deps ----------
