@@ -134,9 +134,9 @@ fi
 source .venv/bin/activate
 
 if [[ ! -f ".venv/.deps_done" ]]; then
-  log "installing python dependencies"
-  pip install --quiet --upgrade pip
-  pip install --quiet -r requirements.txt
+  log "installing python dependencies (this may take 1-3 min)"
+  pip install --upgrade pip
+  pip install --progress-bar on -r requirements.txt
   touch .venv/.deps_done
   ok "python deps installed"
 else
