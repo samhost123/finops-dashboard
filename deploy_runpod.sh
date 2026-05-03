@@ -90,6 +90,17 @@ else
   ok "$RESOLVER_NAME already registered"
 fi
 
+# Remove the bare auto-created `hf.co/sammiset/...` entries.
+# Ollama keeps them as a side-effect of pulling, but they have NO Modelfile
+# applied (no SYSTEM prompt, no <think> fix). The dashboard's substring
+# matcher can pick them and hang on raw thinking-mode output.
+for stray in "hf.co/sammiset/finops-fail-triage:latest" "hf.co/sammiset/finops-resolver:latest"; do
+  if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$stray"; then
+    log "removing stray pull: $stray"
+    ollama rm "$stray" >/dev/null || warn "could not remove $stray"
+  fi
+done
+
 # ---------- 5. smoke-test both models ----------
 # Use the HTTP API directly: avoids SIGPIPE from `ollama run | head` under
 # pipefail, gives a clean error payload, and a generous timeout absorbs the
