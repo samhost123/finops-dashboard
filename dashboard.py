@@ -1288,7 +1288,7 @@ hr { border-color: var(--fo-hair) !important; opacity: 1 !important; }
     border: 1px solid var(--fo-hair) !important;
     border-radius: 1px !important;
 }
-[data-testid="stExpander"] summary span {
+[data-testid="stExpander"] summary p {
     font-family: var(--fo-mono) !important;
     font-weight: 500 !important;
     font-size: 10px !important;
@@ -1297,28 +1297,38 @@ hr { border-color: var(--fo-hair) !important; opacity: 1 !important; }
     color: var(--fo-text-dim) !important;
 }
 
-/* Dataframe (queue) */
-[data-testid="stDataFrame"] { font-family: var(--fo-mono) !important; }
-[data-testid="stDataFrame"] [role="columnheader"] {
-    background: var(--fo-panel) !important;
-    color: var(--fo-text-dim) !important;
-    font-family: var(--fo-mono) !important;
-    font-weight: 500 !important;
-    font-size: 9.5px !important;
-    letter-spacing: 0.14em !important;
-    text-transform: uppercase !important;
-    border-bottom: 1px solid var(--fo-hair-2) !important;
-}
-[data-testid="stDataFrame"] [role="gridcell"] {
-    font-family: var(--fo-mono) !important;
-    font-variant-numeric: tabular-nums !important;
-    color: var(--fo-text) !important;
-    padding: 11px 14px !important;
-    border-bottom: 1px solid var(--fo-hair) !important;
-}
-[data-testid="stDataFrame"] [role="row"][aria-selected="true"] [role="gridcell"] {
-    background: rgba(245,181,66,0.06) !important;
-    box-shadow: inset 3px 0 0 var(--fo-accent) !important;
+/* Dataframe (glide-data-grid, canvas-rendered — themed via CSS vars) */
+[data-testid="stDataFrame"] {
+    --gdg-accent-color: var(--fo-accent);
+    --gdg-accent-light: rgba(245, 181, 66, 0.10);
+    --gdg-bg-cell: var(--fo-panel-2);
+    --gdg-bg-cell-medium: var(--fo-panel-3);
+    --gdg-bg-header: var(--fo-panel);
+    --gdg-bg-header-has-focus: var(--fo-panel);
+    --gdg-bg-header-hovered: var(--fo-panel-3);
+    --gdg-bg-bubble: var(--fo-panel-3);
+    --gdg-bg-bubble-selected: var(--fo-accent);
+    --gdg-bg-search-result: rgba(245, 181, 66, 0.15);
+    --gdg-border-color: var(--fo-hair);
+    --gdg-horizontal-border-color: var(--fo-hair);
+    --gdg-drilldown-border: var(--fo-hair-2);
+    --gdg-link-color: var(--fo-accent);
+    --gdg-text-dark: var(--fo-text);
+    --gdg-text-medium: var(--fo-text-dim);
+    --gdg-text-light: var(--fo-text-mute);
+    --gdg-text-bubble: var(--fo-text);
+    --gdg-text-header: var(--fo-text-dim);
+    --gdg-text-header-selected: var(--fo-text);
+    --gdg-text-group-header: var(--fo-text-dim);
+    --gdg-cell-horizontal-padding: 14px;
+    --gdg-cell-vertical-padding: 11px;
+    --gdg-header-bg: var(--fo-panel);
+    --gdg-header-icon-bg: var(--fo-panel-3);
+    --gdg-header-fg-icon-bg: var(--fo-text-dim);
+    --gdg-font-family: "IBM Plex Mono", ui-monospace, monospace;
+    --gdg-base-font-style: 12px "IBM Plex Mono", ui-monospace, monospace;
+    --gdg-header-font-style: 600 10px "IBM Plex Mono", ui-monospace, monospace;
+    --gdg-editor-font-family: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 /* === Top bar === */
