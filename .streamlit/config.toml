@@ -4,8 +4,8 @@ address = "0.0.0.0"
 
 [theme]
 base = "dark"
-primaryColor = "#4ED6C9"
-backgroundColor = "#0a0b0d"
-secondaryBackgroundColor = "#101217"
-textColor = "#d7dae1"
+primaryColor = "#f5b542"
+backgroundColor = "#161513"
+secondaryBackgroundColor = "#1c1b18"
+textColor = "#ece7d8"
 font = "monospace"
