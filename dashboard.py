@@ -1189,34 +1189,36 @@ def build_pdf(fails, batch_results, kpi_data):
 # ---------------------------------------------------------------------------
 
 THEME_CSS = """<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600;700&display=swap');
 
 :root {
-    --fo-bg: #0a0b0d;
-    --fo-panel: #101217;
-    --fo-panel-2: #151823;
-    --fo-panel-3: #1b1f2a;
-    --fo-hair: #20242f;
-    --fo-hair-2: #2a2f3d;
-    --fo-text: #d7dae1;
-    --fo-text-dim: #8a8f9c;
-    --fo-text-mute: #5a5f6c;
-    --fo-accent: #4ED6C9;
-    --fo-accent-ink: #0a0b0d;
-    --fo-crit: #ff5a5f;
-    --fo-crit-bg: rgba(255,90,95,0.10);
-    --fo-warn: #ffb547;
-    --fo-warn-bg: rgba(255,181,71,0.10);
-    --fo-ok: #52d18a;
-    --fo-ok-bg: rgba(82,209,138,0.10);
-    --fo-fresh: #2f8a5a;
-    --fo-fresh-bg: rgba(47,138,90,0.12);
-    --fo-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
-    --fo-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --fo-bg: #161513;
+    --fo-panel: #1c1b18;
+    --fo-panel-2: #21201d;
+    --fo-panel-3: #272622;
+    --fo-hair: #2d2c28;
+    --fo-hair-2: #3f3e39;
+    --fo-text: #ece7d8;
+    --fo-text-dim: #a8a294;
+    --fo-text-mute: #6b6759;
+    --fo-accent: #f5b542;
+    --fo-accent-ink: #161513;
+    --fo-crit: #ff5e4a;
+    --fo-crit-bg: rgba(255,94,74,0.10);
+    --fo-warn: #f5b542;
+    --fo-warn-bg: rgba(245,181,66,0.10);
+    --fo-ok: #7dd384;
+    --fo-ok-bg: rgba(125,211,132,0.10);
+    --fo-fresh: #7dd384;
+    --fo-fresh-bg: rgba(125,211,132,0.10);
+    --fo-mono: "IBM Plex Mono", ui-monospace, monospace;
+    --fo-sans: "IBM Plex Sans", system-ui, sans-serif;
+    --fo-serif: "IBM Plex Serif", Georgia, serif;
 }
 
 /* === Streamlit overrides === */
-.stApp { background: var(--fo-bg) !important; }
+.stApp { background: var(--fo-bg) !important; font-family: var(--fo-sans) !important; }
+body { font-family: var(--fo-sans); }
 header[data-testid="stHeader"] { display: none !important; }
 footer { display: none !important; }
 .stDeployButton { display: none !important; }
@@ -1251,32 +1253,72 @@ hr { border-color: var(--fo-hair) !important; opacity: 1 !important; }
 .stRadio > div { flex-wrap: wrap !important; }
 .stRadio label span {
     font-family: var(--fo-mono) !important;
+    font-weight: 500 !important;
     font-size: 10px !important;
-    letter-spacing: 0.08em !important;
+    letter-spacing: 0.12em !important;
     text-transform: uppercase !important;
+    color: var(--fo-text-dim) !important;
 }
 
 /* Buttons */
 .stButton > button {
     font-family: var(--fo-mono) !important;
+    font-weight: 500 !important;
     font-size: 10.5px !important;
-    letter-spacing: 0.1em !important;
+    letter-spacing: 0.14em !important;
     text-transform: uppercase !important;
-    border-radius: 3px !important;
+    border-radius: 1px !important;
+    background: var(--fo-panel-2) !important;
+    border: 1px solid var(--fo-hair-2) !important;
+    color: var(--fo-text) !important;
+}
+.stButton > button:hover {
+    border-color: var(--fo-accent) !important;
+    color: var(--fo-accent) !important;
+}
+.stButton > button[kind="primary"] {
+    background: var(--fo-accent) !important;
+    color: var(--fo-accent-ink) !important;
+    border-color: var(--fo-accent) !important;
 }
 
 /* Expander */
 [data-testid="stExpander"] {
     background: var(--fo-panel-2) !important;
     border: 1px solid var(--fo-hair) !important;
-    border-radius: 0 !important;
+    border-radius: 1px !important;
 }
 [data-testid="stExpander"] summary span {
     font-family: var(--fo-mono) !important;
+    font-weight: 500 !important;
     font-size: 10px !important;
-    letter-spacing: 0.1em !important;
+    letter-spacing: 0.14em !important;
     text-transform: uppercase !important;
     color: var(--fo-text-dim) !important;
+}
+
+/* Dataframe (queue) */
+[data-testid="stDataFrame"] { font-family: var(--fo-mono) !important; }
+[data-testid="stDataFrame"] [role="columnheader"] {
+    background: var(--fo-panel) !important;
+    color: var(--fo-text-dim) !important;
+    font-family: var(--fo-mono) !important;
+    font-weight: 500 !important;
+    font-size: 9.5px !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+    border-bottom: 1px solid var(--fo-hair-2) !important;
+}
+[data-testid="stDataFrame"] [role="gridcell"] {
+    font-family: var(--fo-mono) !important;
+    font-variant-numeric: tabular-nums !important;
+    color: var(--fo-text) !important;
+    padding: 11px 14px !important;
+    border-bottom: 1px solid var(--fo-hair) !important;
+}
+[data-testid="stDataFrame"] [role="row"][aria-selected="true"] [role="gridcell"] {
+    background: rgba(245,181,66,0.06) !important;
+    box-shadow: inset 3px 0 0 var(--fo-accent) !important;
 }
 
 /* === Top bar === */
@@ -1284,52 +1326,60 @@ hr { border-color: var(--fo-hair) !important; opacity: 1 !important; }
     display: flex; align-items: center;
     background: var(--fo-panel);
     border-bottom: 1px solid var(--fo-hair);
-    padding: 10px 14px; gap: 14px;
+    padding: 18px 28px; gap: 16px;
 }
-.fo-brand { display: flex; align-items: center; gap: 10px; }
+.fo-brand { display: flex; align-items: center; gap: 12px; }
 .fo-brand-mark {
-    width: 22px; height: 22px; border-radius: 3px;
+    width: 32px; height: 32px; border-radius: 1px;
     background: var(--fo-accent); color: var(--fo-accent-ink);
     display: grid; place-items: center;
-    font-family: var(--fo-mono); font-weight: 700; font-size: 13px;
+    font-family: var(--fo-serif); font-weight: 700; font-size: 16px;
 }
-.fo-brand-name { font-family: var(--fo-mono); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; color: var(--fo-text); }
-.fo-brand-sub { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.06em; color: var(--fo-text-dim); }
+.fo-brand-name { font-family: var(--fo-serif); font-weight: 600; font-size: 16px; letter-spacing: 0.04em; color: var(--fo-text); }
+.fo-brand-sub { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; }
 .fo-top-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
-.fo-status-cluster { display: flex; gap: 16px; font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-dim); }
+.fo-status-cluster { display: flex; gap: 18px; font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-dim); }
 .fo-status-item { display: flex; align-items: center; gap: 6px; }
-.fo-label { color: var(--fo-text-mute); letter-spacing: 0.1em; text-transform: uppercase; }
-.fo-val { color: var(--fo-text); }
+.fo-label { color: var(--fo-text-mute); letter-spacing: 0.14em; text-transform: uppercase; font-weight: 500; }
+.fo-val { color: var(--fo-text); font-variant-numeric: tabular-nums; }
 .fo-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .fo-dot.ok { background: var(--fo-ok); box-shadow: 0 0 6px var(--fo-ok); }
 .fo-dot.warn { background: var(--fo-warn); box-shadow: 0 0 6px var(--fo-warn); }
 
 /* === KPI strip === */
 .fo-kpis {
-    display: grid; grid-template-columns: repeat(7, 1fr);
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 14px;
     background: var(--fo-panel);
     border-bottom: 1px solid var(--fo-hair);
+    padding: 20px;
 }
 .fo-kpi {
-    padding: 10px 14px; border-right: 1px solid var(--fo-hair);
-    display: flex; flex-direction: column; gap: 4px;
+    padding: 16px 18px;
+    background: var(--fo-panel-2);
+    border: 1px solid var(--fo-hair);
+    border-radius: 1px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.02);
+    display: flex; flex-direction: column; gap: 8px;
 }
-.fo-kpi:last-child { border-right: 0; }
-.fo-kpi-label { font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fo-text-dim); }
-.fo-kpi-val { font-family: var(--fo-mono); font-size: 22px; font-weight: 500; color: var(--fo-text); line-height: 1; }
+.fo-kpi-label { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fo-text-dim); }
+.fo-kpi-val {
+    font-family: var(--fo-mono); font-size: 32px; font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    color: var(--fo-text); line-height: 1;
+}
 .fo-kpi-val.crit { color: var(--fo-crit); }
 .fo-kpi-val.warn { color: var(--fo-warn); }
 .fo-kpi-val.ok { color: var(--fo-ok); }
-.fo-kpi-sub { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-mute); }
+.fo-kpi-sub { font-family: var(--fo-sans); font-size: 11px; color: var(--fo-text-mute); line-height: 1.55; }
 
 /* === Queue table === */
 .fo-queue-head {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; background: var(--fo-panel);
+    padding: 12px 16px; background: var(--fo-panel);
     border-bottom: 1px solid var(--fo-hair);
 }
-.fo-panel-title { font-family: var(--fo-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fo-text); }
-.fo-panel-sub { font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-dim); margin-left: 8px; }
+.fo-panel-title { font-family: var(--fo-serif); font-weight: 600; font-size: 14px; letter-spacing: 0.04em; color: var(--fo-text); }
+.fo-panel-sub { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.12em; color: var(--fo-text-dim); margin-left: 8px; text-transform: uppercase; font-variant-numeric: tabular-nums; }
 .fo-queue-scroll { overflow: auto; max-height: calc(100vh - 320px); min-height: 300px; }
 
 table.fo-qtab {
@@ -1339,18 +1389,20 @@ table.fo-qtab {
 table.fo-qtab thead th {
     position: sticky; top: 0; z-index: 2;
     background: var(--fo-panel); color: var(--fo-text-dim);
-    font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
-    font-size: 9.5px; padding: 7px 8px; text-align: left;
+    font-family: var(--fo-mono); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    font-size: 9.5px; padding: 11px 14px; text-align: left;
     border-bottom: 1px solid var(--fo-hair-2); white-space: nowrap;
 }
 table.fo-qtab thead th.r { text-align: right; }
 table.fo-qtab tbody td {
-    padding: 6px 8px; border-bottom: 1px solid var(--fo-hair);
+    padding: 11px 14px; border-bottom: 1px solid var(--fo-hair);
     white-space: nowrap; vertical-align: middle; color: var(--fo-text);
+    font-variant-numeric: tabular-nums;
 }
 table.fo-qtab tbody td.r { text-align: right; }
 table.fo-qtab tbody tr.is-sel {
-    background: rgba(78,214,201,0.06);
+    background: rgba(245,181,66,0.06);
     box-shadow: inset 3px 0 0 var(--fo-accent);
 }
 
@@ -1359,45 +1411,45 @@ table.fo-qtab tbody tr.is-sel {
 .fo-tdot.tier-high { background: var(--fo-warn); }
 .fo-tdot.tier-medium { background: var(--fo-ok); }
 .fo-tdot.tier-low { background: var(--fo-fresh); }
-.fo-tn { font-size: 10px; letter-spacing: 0.08em; }
+.fo-tn { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 .fo-tn.tier-critical { color: var(--fo-crit); }
 .fo-tn.tier-high { color: var(--fo-warn); }
 .fo-tn.tier-medium { color: var(--fo-ok); }
 .fo-tn.tier-low { color: var(--fo-fresh); }
 
-.fo-age-pill { display: inline-block; min-width: 30px; padding: 2px 6px; text-align: center; border-radius: 2px; font-size: 10.5px; }
+.fo-age-pill { display: inline-block; min-width: 30px; padding: 2px 6px; text-align: center; border-radius: 1px; font-family: var(--fo-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .fo-age-pill.age-crit { background: var(--fo-crit-bg); color: var(--fo-crit); }
 .fo-age-pill.age-warn { background: var(--fo-warn-bg); color: var(--fo-warn); }
 .fo-age-pill.age-ok { background: var(--fo-ok-bg); color: var(--fo-ok); }
 .fo-age-pill.age-fresh { background: var(--fo-fresh-bg); color: var(--fo-fresh); }
 
-.fo-rs-pill { background: var(--fo-crit-bg); color: var(--fo-crit); padding: 1px 5px; border-radius: 2px; font-size: 10px; }
+.fo-rs-pill { background: var(--fo-crit-bg); color: var(--fo-crit); padding: 2px 6px; border-radius: 1px; font-family: var(--fo-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
 .fo-cov-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .fo-spark { background: var(--fo-panel-3); border-radius: 1px; overflow: hidden; display: inline-block; }
 .fo-spark-fill { height: 100%; display: block; }
-.fo-cov-n { color: var(--fo-text-dim); font-size: 10px; }
+.fo-cov-n { color: var(--fo-text-dim); font-family: var(--fo-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
 .fo-cp-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 .fo-cp-dot.prime { background: var(--fo-accent); }
 .fo-cp-dot.exec { background: var(--fo-text-mute); }
 .fo-fchips { display: inline-flex; gap: 4px; }
-.fo-fchip { font-size: 9px; letter-spacing: 0.04em; padding: 1px 5px; border: 1px solid var(--fo-hair-2); color: var(--fo-text-dim); border-radius: 2px; }
-.fo-fchip-more { font-size: 9px; color: var(--fo-text-mute); padding: 1px 3px; }
+.fo-fchip { font-family: var(--fo-mono); font-size: 9px; letter-spacing: 0.06em; padding: 2px 6px; border: 1px solid var(--fo-hair-2); color: var(--fo-text-dim); border-radius: 1px; text-transform: uppercase; }
+.fo-fchip-more { font-family: var(--fo-mono); font-size: 9px; color: var(--fo-text-mute); padding: 2px 4px; }
 .fo-ai-done { color: var(--fo-accent); }
 .fo-ai-pending { color: var(--fo-text-mute); }
-.fo-sym { color: var(--fo-text); }
-.fo-cusip { color: var(--fo-text-mute); font-size: 9.5px; }
+.fo-sym { color: var(--fo-text); font-family: var(--fo-mono); font-weight: 500; }
+.fo-cusip { color: var(--fo-text-mute); font-family: var(--fo-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; }
 
 /* === Detail panel === */
 .fo-detail-head {
-    padding: 12px 16px; background: var(--fo-panel);
+    padding: 16px 20px; background: var(--fo-panel);
     border-bottom: 1px solid var(--fo-hair);
 }
-.fo-fid-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-.fo-fid-label { font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--fo-text-mute); }
-.fo-fid-value { font-family: var(--fo-mono); font-size: 12px; color: var(--fo-text); }
+.fo-fid-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.fo-fid-label { font-family: var(--fo-mono); font-weight: 500; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fo-text-mute); }
+.fo-fid-value { font-family: var(--fo-mono); font-size: 12px; color: var(--fo-text); font-variant-numeric: tabular-nums; }
 .fo-chip {
-    font-family: var(--fo-mono); font-size: 9.5px; letter-spacing: 0.1em;
-    padding: 2px 7px; border-radius: 2px; text-transform: uppercase;
+    font-family: var(--fo-mono); font-weight: 500; font-size: 9.5px; letter-spacing: 0.14em;
+    padding: 3px 8px; border-radius: 1px; text-transform: uppercase;
     display: inline-block;
 }
 .fo-chip.tier-critical { background: var(--fo-crit-bg); color: var(--fo-crit); }
@@ -1407,93 +1459,164 @@ table.fo-qtab tbody tr.is-sel {
 .fo-chip-regsho { background: var(--fo-crit-bg); color: var(--fo-crit); }
 .fo-chip-gridlock { background: var(--fo-warn-bg); color: var(--fo-warn); }
 
-.fo-fail-title { font-family: var(--fo-mono); font-size: 18px; font-weight: 500; color: var(--fo-text); margin: 0 0 4px; }
-.fo-fail-sub { font-family: var(--fo-mono); font-size: 10.5px; color: var(--fo-text-dim); letter-spacing: 0.04em; }
+.fo-fail-title { font-family: var(--fo-serif); font-size: 28px; font-weight: 600; color: var(--fo-text); margin: 0 0 6px; letter-spacing: -0.005em; }
+.fo-fail-sub { font-family: var(--fo-sans); font-size: 12px; color: var(--fo-text-dim); line-height: 1.55; }
+.fo-fail-sub .num { font-family: var(--fo-mono); font-variant-numeric: tabular-nums; }
 
 /* === Metric strip === */
 .fo-mstrip {
-    display: grid; grid-template-columns: repeat(6, 1fr);
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px;
     background: var(--fo-panel); border-bottom: 1px solid var(--fo-hair);
+    padding: 16px 20px;
 }
-.fo-ms { padding: 10px 12px; border-right: 1px solid var(--fo-hair); display: flex; flex-direction: column; gap: 3px; }
-.fo-ms:last-child { border-right: 0; }
-.fo-ms-l { font-family: var(--fo-mono); font-size: 9px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; }
-.fo-ms-v { font-family: var(--fo-mono); font-size: 20px; font-weight: 500; color: var(--fo-text); line-height: 1; }
+.fo-ms {
+    padding: 14px 16px;
+    background: var(--fo-panel-2);
+    border: 1px solid var(--fo-hair);
+    border-radius: 1px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.02);
+    display: flex; flex-direction: column; gap: 6px;
+}
+.fo-ms-l { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; }
+.fo-ms-v {
+    font-family: var(--fo-mono); font-size: 24px; font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    color: var(--fo-text); line-height: 1;
+}
 .fo-ms-v.crit { color: var(--fo-crit); }
 .fo-ms-v.warn { color: var(--fo-warn); }
 .fo-ms-v.ok { color: var(--fo-ok); }
-.fo-ms-v .sm { font-size: 12px; color: var(--fo-text-dim); font-weight: 400; }
-.fo-ms-s { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-mute); }
-.fo-cov-bar { height: 4px; width: 100%; background: var(--fo-panel-3); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.fo-ms-v .sm { font-size: 13px; color: var(--fo-text-dim); font-weight: 400; }
+.fo-ms-s { font-family: var(--fo-sans); font-size: 11px; color: var(--fo-text-mute); line-height: 1.55; }
+.fo-cov-bar { height: 4px; width: 100%; background: var(--fo-panel-3); border-radius: 1px; margin-top: 4px; overflow: hidden; }
 .fo-cov-bar-fill { height: 100%; }
 .fo-flag-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .fo-flag-tag {
-    padding: 2px 7px; background: var(--fo-panel-3);
-    border: 1px solid var(--fo-hair-2); border-radius: 2px;
-    font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim);
+    padding: 3px 8px; background: var(--fo-panel-3);
+    border: 1px solid var(--fo-hair-2); border-radius: 1px;
+    font-family: var(--fo-mono); font-weight: 500; font-size: 9.5px; letter-spacing: 0.12em;
+    color: var(--fo-text-dim); text-transform: uppercase;
 }
 
-/* === Stage cards === */
-.fo-stage-card { padding: 14px 18px 22px; }
+/* === Stage cards (pipeline nodes) === */
+.fo-stage-card {
+    position: relative;
+    padding: 20px 22px 24px;
+    margin: 16px;
+    background: var(--fo-panel-2);
+    border: 1px solid var(--fo-hair);
+    border-radius: 1px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.02);
+}
+.fo-stage-card[data-stage="02"]::before {
+    content: "›";
+    position: absolute;
+    left: -22px; top: 50%; transform: translateY(-50%);
+    font-family: var(--fo-serif); font-size: 28px; font-weight: 600;
+    color: var(--fo-hair-2);
+    width: 24px; text-align: center;
+}
+.fo-stage-card[data-stage="01"]::after {
+    content: "";
+    position: absolute;
+    right: -17px; top: 50%;
+    width: 16px; height: 1px;
+    background: var(--fo-hair-2);
+}
 .fo-stage-head {
-    display: flex; align-items: center; gap: 10px;
-    margin-bottom: 12px; padding-bottom: 10px;
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px; padding-bottom: 14px;
     border-bottom: 1px solid var(--fo-hair);
 }
 .fo-stage-num {
-    width: 28px; height: 28px; border-radius: 3px;
-    background: var(--fo-panel-3); color: var(--fo-accent);
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--fo-accent); color: var(--fo-accent-ink);
     font-family: var(--fo-mono); font-weight: 600; font-size: 12px;
+    font-variant-numeric: tabular-nums;
     display: grid; place-items: center;
 }
-.fo-stage-title { font-family: var(--fo-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fo-text); }
-.fo-stage-sub { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim); }
-.fo-assessment { font-family: var(--fo-sans); font-size: 13px; line-height: 1.7; color: var(--fo-text); margin-bottom: 14px; }
-.fo-kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; margin-top: 6px; }
-.fo-kv { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--fo-hair); }
-.fo-kv .k { font-family: var(--fo-mono); font-size: 9.5px; color: var(--fo-text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
-.fo-kv .v { font-family: var(--fo-mono); font-size: 11px; color: var(--fo-text); }
+.fo-stage-title { font-family: var(--fo-serif); font-weight: 600; font-size: 15px; letter-spacing: 0.02em; color: var(--fo-text); }
+.fo-stage-sub { font-family: var(--fo-mono); font-weight: 500; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fo-text-dim); }
+.fo-assessment { font-family: var(--fo-sans); font-size: 13px; line-height: 1.55; color: var(--fo-text); margin-bottom: 16px; }
+.fo-kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; margin-top: 8px; }
+.fo-kv { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--fo-hair); }
+.fo-kv .k { font-family: var(--fo-mono); font-weight: 500; font-size: 9.5px; color: var(--fo-text-dim); letter-spacing: 0.14em; text-transform: uppercase; }
+.fo-kv .v { font-family: var(--fo-mono); font-size: 11px; color: var(--fo-text); font-variant-numeric: tabular-nums; }
 
 /* Banners */
 .fo-banner {
-    padding: 9px 12px; border-radius: 3px;
-    font-family: var(--fo-mono); font-size: 10.5px;
-    margin-bottom: 12px; letter-spacing: 0.02em; border-left: 3px solid;
+    padding: 11px 14px; border-radius: 1px;
+    font-family: var(--fo-sans); font-size: 12px; line-height: 1.55;
+    margin-bottom: 14px; border-left: 3px solid;
 }
 .fo-banner.crit { background: var(--fo-crit-bg); color: var(--fo-crit); border-color: var(--fo-crit); }
 .fo-banner.warn { background: var(--fo-warn-bg); color: var(--fo-warn); border-color: var(--fo-warn); }
 .fo-banner.ok { background: var(--fo-ok-bg); color: var(--fo-ok); border-color: var(--fo-ok); }
 
-/* Steps */
-.fo-steps-title { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.12em; color: var(--fo-text-dim); text-transform: uppercase; margin-bottom: 8px; }
-.fo-steps { list-style: none; padding: 0; margin: 0 0 16px; }
-.fo-steps li { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--fo-hair); align-items: flex-start; }
-.fo-steps li:last-child { border-bottom: 0; }
-.fo-step-n { color: var(--fo-accent); font-size: 11px; min-width: 24px; font-family: var(--fo-mono); }
-.fo-step-t { font-family: var(--fo-sans); font-size: 12.5px; line-height: 1.6; color: var(--fo-text); }
+/* Steps — vertical timeline */
+.fo-steps-title { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; margin-bottom: 12px; }
+.fo-steps {
+    list-style: none; padding: 0; margin: 0 0 18px;
+    position: relative;
+}
+.fo-steps::before {
+    content: "";
+    position: absolute;
+    left: 13px; top: 8px; bottom: 8px;
+    width: 1px; background: var(--fo-hair-2);
+}
+.fo-steps li {
+    position: relative;
+    display: grid; grid-template-columns: 28px 1fr; gap: 14px;
+    padding: 6px 0 14px;
+    align-items: flex-start;
+}
+.fo-steps li:last-child { padding-bottom: 0; }
+.fo-step-n {
+    position: relative; z-index: 1;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--fo-accent); color: var(--fo-accent-ink);
+    font-family: var(--fo-mono); font-weight: 600; font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    display: grid; place-items: center;
+    box-shadow: 0 0 0 4px var(--fo-panel-2);
+}
+.fo-step-card {
+    background: var(--fo-panel-3);
+    border: 1px solid var(--fo-hair);
+    border-radius: 1px;
+    padding: 10px 12px;
+}
+.fo-step-t { font-family: var(--fo-sans); font-size: 12.5px; line-height: 1.55; color: var(--fo-text); }
+.fo-step-t .num { font-family: var(--fo-mono); font-variant-numeric: tabular-nums; }
+.fo-step-bar { height: 3px; background: var(--fo-panel); border-radius: 1px; margin-top: 8px; overflow: hidden; }
+.fo-step-bar-fill { height: 100%; background: var(--fo-accent); }
 
-.fo-subhead { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.12em; color: var(--fo-text-dim); text-transform: uppercase; margin: 14px 0 6px; }
-.fo-prose { font-family: var(--fo-sans); font-size: 12.5px; line-height: 1.65; color: var(--fo-text); }
+.fo-subhead { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.14em; color: var(--fo-text-dim); text-transform: uppercase; margin: 16px 0 8px; }
+.fo-prose { font-family: var(--fo-sans); font-size: 13px; line-height: 1.55; color: var(--fo-text); }
 
 /* Trace */
-.fo-trace-body { font-family: var(--fo-mono); font-size: 10.5px; color: var(--fo-text-dim); line-height: 1.7; }
-.fo-trace-line { display: flex; gap: 10px; padding: 3px 0; }
-.fo-trace-n { color: var(--fo-accent); min-width: 22px; }
+.fo-trace-body { font-family: var(--fo-mono); font-size: 11px; color: var(--fo-text-dim); line-height: 1.7; }
+.fo-trace-line { display: flex; gap: 12px; padding: 3px 0; }
+.fo-trace-n { color: var(--fo-accent); min-width: 24px; font-variant-numeric: tabular-nums; }
 .fo-trace-t { color: var(--fo-text-dim); }
 
 /* Status bar */
 .fo-statusbar {
     background: var(--fo-panel); border-top: 1px solid var(--fo-hair);
-    display: flex; align-items: center; padding: 4px 14px; gap: 8px;
-    font-family: var(--fo-mono); font-size: 10px; color: var(--fo-text-mute);
-    letter-spacing: 0.06em; margin-top: 4px;
+    display: flex; align-items: center; padding: 8px 20px; gap: 10px;
+    font-family: var(--fo-mono); font-weight: 500; font-size: 10px; color: var(--fo-text-mute);
+    letter-spacing: 0.12em; text-transform: uppercase; margin-top: 4px;
 }
-.fo-statusbar .v { color: var(--fo-text-dim); }
+.fo-statusbar .v { color: var(--fo-text-dim); font-variant-numeric: tabular-nums; }
 
 /* Empty state */
 .fo-empty { display: flex; align-items: center; justify-content: center; padding: 80px 40px; text-align: center; }
-.fo-empty-k { font-family: var(--fo-mono); font-size: 10px; letter-spacing: 0.16em; color: var(--fo-text-mute); margin-bottom: 12px; text-transform: uppercase; }
-.fo-empty-h { font-size: 16px; color: var(--fo-text-dim); line-height: 1.5; margin-bottom: 16px; }
+.fo-empty-k { font-family: var(--fo-mono); font-weight: 500; font-size: 10px; letter-spacing: 0.16em; color: var(--fo-text-mute); margin-bottom: 14px; text-transform: uppercase; }
+.fo-empty-h { font-family: var(--fo-serif); font-weight: 600; font-size: 18px; color: var(--fo-text-dim); line-height: 1.4; margin-bottom: 18px; }
+
+/* Modal-ish heading helper */
+.fo-modal-title { font-family: var(--fo-serif); font-weight: 600; font-size: 16px; color: var(--fo-text); }
 </style>"""
 
 
@@ -1577,11 +1700,11 @@ def _render_stage1_html(fail, triage_data, is_ai=False):
             for fl in flags
         ) + "</div>"
 
-    return f"""<div class="fo-stage-card">
+    return f"""<div class="fo-stage-card" data-stage="01">
 <header class="fo-stage-head">
 <div class="fo-stage-num">01</div>
 <div><div class="fo-stage-title">TRIAGE MODEL</div><div class="fo-stage-sub">Prioritization · Tier · Flags</div></div>
-<div style="margin-left:auto;font-family:var(--fo-mono);font-size:9.5px;color:var(--fo-text-mute)">{source_label}</div>
+<div style="margin-left:auto;font-family:var(--fo-mono);font-weight:500;font-size:9.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fo-text-mute)">{source_label}</div>
 </header>
 <div class="fo-assessment">{_esc(reason)}</div>
 <div class="fo-kv-grid">
@@ -1608,6 +1731,7 @@ def _render_stage2_html(fail, resolver_data, dtc_map):
     steps = r.get("resolution_steps", [])
     steps_html = ""
     if steps:
+        total_q = sum((s.get("qty", 0) or 0) for s in steps) or 1
         items = ""
         for step in steps:
             num = step.get("step", "?")
@@ -1617,7 +1741,16 @@ def _render_stage2_html(fail, resolver_data, dtc_map):
             dtc_code = step.get("dtc", "")
             firm = _dtc_to_firm(dtc_code, dtc_map) if dtc_code else ""
             ftxt = f" ({_esc(firm)})" if firm and firm != dtc_code else ""
-            items += f'<li><span class="fo-step-n">{str(num).zfill(2)}</span><span class="fo-step-t">{_esc(atxt)} — {qty:,} shares from {_esc(dtc_code)}{ftxt}</span></li>'
+            pct = (qty / total_q * 100) if total_q else 0
+            items += (
+                f'<li>'
+                f'<span class="fo-step-n">{str(num).zfill(2)}</span>'
+                f'<div class="fo-step-card">'
+                f'<div class="fo-step-t">{_esc(atxt)} — <span class="num">{qty:,}</span> shares from {_esc(dtc_code)}{ftxt}</div>'
+                f'<div class="fo-step-bar"><div class="fo-step-bar-fill" style="width:{pct:.1f}%"></div></div>'
+                f'</div>'
+                f'</li>'
+            )
         steps_html = f'<div class="fo-steps-title">RECOMMENDED RESOLUTION STEPS</div><ol class="fo-steps">{items}</ol>'
 
     fb = r.get("fallback_strategy")
@@ -1657,21 +1790,21 @@ def _render_stage2_html(fail, resolver_data, dtc_map):
     residual = r.get("residual_short", 0) or 0
 
     cov_color = "var(--fo-ok)" if cov_pct >= 100 else "var(--fo-warn)" if cov_pct >= 75 else "var(--fo-crit)"
-    cov_summary = f"""<div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin:12px 0;background:var(--fo-panel);border:1px solid var(--fo-hair);border-radius:3px">
-<div style="padding:10px 12px;border-right:1px solid var(--fo-hair);text-align:center">
-<div style="font-family:var(--fo-mono);font-size:24px;font-weight:500;color:{cov_color}">{cov_pct}%</div>
-<div style="font-family:var(--fo-mono);font-size:9px;color:var(--fo-text-mute);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px">Total Coverage</div>
+    cov_summary = f"""<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0">
+<div style="padding:14px 16px;background:var(--fo-panel-3);border:1px solid var(--fo-hair);border-radius:1px;box-shadow:0 1px 0 rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.02);text-align:center">
+<div style="font-family:var(--fo-mono);font-size:28px;font-weight:400;font-variant-numeric:tabular-nums;color:{cov_color};line-height:1">{cov_pct}%</div>
+<div style="font-family:var(--fo-mono);font-weight:500;font-size:10px;color:var(--fo-text-mute);letter-spacing:0.14em;text-transform:uppercase;margin-top:8px">Total Coverage</div>
 </div>
-<div style="padding:10px 12px;text-align:center">
-<div style="font-family:var(--fo-mono);font-size:24px;font-weight:500;color:var(--fo-text)">{residual:,}</div>
-<div style="font-family:var(--fo-mono);font-size:9px;color:var(--fo-text-mute);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px">Residual Short</div>
+<div style="padding:14px 16px;background:var(--fo-panel-3);border:1px solid var(--fo-hair);border-radius:1px;box-shadow:0 1px 0 rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.02);text-align:center">
+<div style="font-family:var(--fo-mono);font-size:28px;font-weight:400;font-variant-numeric:tabular-nums;color:var(--fo-text);line-height:1">{residual:,}</div>
+<div style="font-family:var(--fo-mono);font-weight:500;font-size:10px;color:var(--fo-text-mute);letter-spacing:0.14em;text-transform:uppercase;margin-top:8px">Residual Short</div>
 </div></div>"""
 
-    return f"""<div class="fo-stage-card">
+    return f"""<div class="fo-stage-card" data-stage="02">
 <header class="fo-stage-head">
 <div class="fo-stage-num">02</div>
 <div><div class="fo-stage-title">RESOLUTION MODEL</div><div class="fo-stage-sub">Action plan · Fallback · Narrative</div></div>
-<div style="margin-left:auto;font-family:var(--fo-mono);font-size:9.5px;color:var(--fo-text-mute)">AI Model</div>
+<div style="margin-left:auto;font-family:var(--fo-mono);font-weight:500;font-size:9.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fo-text-mute)">AI Model</div>
 </header>
 {banner}{steps_html}{cov_summary}{fb_html}{narr_html}{esc_html}</div>"""
 
@@ -2091,13 +2224,13 @@ with right_col:
         f'<div class="fo-fail-title">{_esc(category_disp)} · {_esc(ticker)}'
         f'<span style="color:var(--fo-text-dim);font-weight:400;font-size:13px;margin-left:8px">{_esc(name)}</span></div>'
         f'<div class="fo-fail-sub">'
-        f'{fail["ftd_qty"]:,} sh · {_fmt_mv(fail["market_value"])} notional'
+        f'<span class="num">{fail["ftd_qty"]:,}</span> sh · <span class="num">{_fmt_mv(fail["market_value"])}</span> notional'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
         f'{"vs CNS" if fail["firm_name"] == "CNS" else _esc(fail["firm_name"]) + (" (PB)" if prime else " (Exec)")}'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
-        f'{_esc(fail["account"])}'
+        f'<span class="num">{_esc(fail["account"])}</span>'
         f'<span style="margin:0 8px;color:var(--fo-text-mute)">·</span>'
-        f'CUSIP {_esc(fail["cusip"])}</div></div>',
+        f'CUSIP <span class="num">{_esc(fail["cusip"])}</span></div></div>',
         unsafe_allow_html=True,
     )
 
@@ -2215,7 +2348,7 @@ with right_col:
                 )
             elif has_ai_triage:
                 st.markdown(
-                    '<div class="fo-stage-card">'
+                    '<div class="fo-stage-card" data-stage="02">'
                     '<header class="fo-stage-head">'
                     '<div class="fo-stage-num">02</div>'
                     '<div><div class="fo-stage-title">RESOLUTION MODEL</div>'
@@ -2248,7 +2381,7 @@ with right_col:
                             st.error(res_result["error"])
             else:
                 st.markdown(
-                    '<div class="fo-stage-card">'
+                    '<div class="fo-stage-card" data-stage="02">'
                     '<header class="fo-stage-head">'
                     '<div class="fo-stage-num">02</div>'
                     '<div><div class="fo-stage-title">RESOLUTION MODEL</div>'
